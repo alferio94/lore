@@ -654,6 +654,19 @@ engram sync --project other-name
 
 **Auto-import**: The OpenCode plugin automatically runs `engram sync --import` when it detects `.engram/manifest.json` in the project directory. Clone a repo, open OpenCode, and the team's memories are loaded.
 
+## Cloud Sync
+
+Sync memories across machines via a Postgres-backed cloud server. **Auto-sync is on by default** — when you run `engram serve` or `engram mcp` with cloud credentials configured, every local write automatically pushes/pulls in the background. No manual sync needed.
+
+- Cloud failures never block local reads or writes — the sync manager degrades gracefully with exponential backoff
+- Manual one-off sync: `engram cloud sync` (push + pull, then exit)
+- Check sync health: `engram cloud sync-status` (pending mutations, degraded state)
+- Project-scoped sync: `engram cloud enroll <project>` to choose which projects sync to the cloud
+- Legacy chunk-based sync: `engram cloud sync --legacy` (deprecated, preserved for backward compatibility)
+- Client contract stays simple: one reachable base URL + one token
+
+See `DOCS.md` for the full cloud workflow, security notes, and local two-machine testing guidance.
+
 ## CLI
 
 ```
@@ -670,6 +683,16 @@ engram export [file]      Export all memories to JSON
 engram import <file>      Import memories from JSON
 engram sync               Export new memories as compressed chunk to .engram/
 engram sync --all         Export ALL projects (ignore directory-based filter)
+engram cloud serve        Start cloud server (Postgres backend)
+engram cloud register     Register a cloud account
+engram cloud login        Login to a cloud account
+engram cloud sync         Sync local mutations to cloud (push + pull)
+engram cloud sync-status  Show local sync journal state
+engram cloud status       Show cloud sync status (legacy chunks)
+engram cloud api-key      Generate an API key for cloud access
+engram cloud enroll <p>   Enroll a project for cloud sync
+engram cloud unenroll <p> Unenroll a project from cloud sync
+engram cloud projects     List enrolled projects
 engram version            Show version
 ```
 
@@ -802,6 +825,11 @@ engram/
 │   ├── mcp/mcp.go                  # MCP stdio server (13 tools)
 │   ├── setup/setup.go              # Agent plugin installer (go:embed)
 │   ├── sync/sync.go                # Git sync: manifest + compressed chunks
+│   ├── cloud/
+│   │   ├── autosync/manager.go     # Background auto-sync manager (lease + backoff)
+│   │   ├── cloudstore/             # Postgres storage (schema, CRUD, mutations)
+│   │   ├── cloudserver/            # Cloud HTTP API (auth, push/pull, mutations)
+│   │   └── remote/transport.go     # HTTP client for cloud sync
 │   └── tui/                        # Bubbletea terminal UI
 │       ├── model.go                # Screen constants, Model, Init()
 │       ├── styles.go               # Lipgloss styles (Catppuccin Mocha)

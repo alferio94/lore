@@ -27,12 +27,13 @@ Engram Go Binary
 SQLite + FTS5 (~/.engram/engram.db)
 ```
 
-Four interfaces:
+Five interfaces:
 
 1. **CLI** — Direct terminal usage (`engram search`, `engram save`, etc.)
 2. **HTTP API** — REST API on port 7437 for plugins and integrations
 3. **MCP Server** — stdio transport for any MCP-compatible agent
 4. **TUI** — Interactive terminal UI for browsing memories (`engram tui`)
+5. **Cloud Server** — Postgres-backed HTTP API for multi-device sync (`engram cloud serve`)
 
 ---
 
@@ -46,11 +47,29 @@ engram/
 │   ├── server/server.go            # HTTP REST API server (port 7437)
 │   ├── mcp/mcp.go                  # MCP stdio server (13 tools)
 │   ├── sync/sync.go                # Git sync: manifest + chunks (gzipped JSONL)
+│   ├── cloud/                      # Cloud sync subsystem (Postgres backend)
+│   │   ├── config.go               # Shared Config struct + ConfigFromEnv()
+│   │   ├── cloudstore/             # Postgres storage (schema, CRUD, FTS via tsvector)
+│   │   │   ├── cloudstore.go       # CloudStore struct, user/session/observation/chunk ops
+│   │   │   ├── schema.go           # DDL for all cloud_* tables
+│   │   │   └── search.go           # Full-text search (ts_rank_cd + plainto_tsquery)
+│   │   ├── auth/                   # JWT + API key authentication
+│   │   │   ├── auth.go             # Service, token generation/validation, register/login
+│   │   │   └── apikey.go           # eng_-prefixed API key generation + SHA-256 validation
+│   │   ├── cloudserver/            # HTTP API for cloud mode
+│   │   │   ├── cloudserver.go      # Route registration, health, auth, search, context
+│   │   │   ├── middleware.go       # JWT/API key auth middleware
+│   │   │   └── push_pull.go        # Chunk + mutation push/pull handlers
+│   │   ├── autosync/               # Background auto-sync manager
+│   │   │   └── manager.go          # Lease-guarded push/pull worker with backoff
+│   │   └── remote/                 # Remote sync transport (HTTP client)
+│   │       └── transport.go        # RemoteTransport: push/pull + mutation push/pull via HTTP
 │   └── tui/                        # Bubbletea terminal UI
 │       ├── model.go                # Screen constants, Model struct, Init(), custom messages
 │       ├── styles.go               # Lipgloss styles (Catppuccin Mocha palette)
 │       ├── update.go               # Update(), handleKeyPress(), per-screen handlers
 │       └── view.go                 # View(), per-screen renderers
+├── docker-compose.yml              # Postgres 16-alpine for local cloud dev/testing
 ├── skills/
 │   └── gentleman-bubbletea/
 │       └── SKILL.md                # Bubbletea TUI patterns reference
@@ -72,6 +91,9 @@ engram/
 - **user_prompts** — `id` (INTEGER PK AUTOINCREMENT), `session_id` (FK), `content`, `project`, `created_at`
 - **prompts_fts** — FTS5 virtual table synced via triggers (`content`, `project`)
 - **sync_chunks** — `chunk_id` (TEXT PK), `imported_at` — tracks which chunks have been imported to prevent duplicates
+- **sync_state** — `target_key` (TEXT PK), `lifecycle`, `last_enqueued_seq`, `last_acked_seq`, `last_pulled_seq`, `consecutive_failures`, `backoff_until`, `lease_owner`, `lease_until`, `last_error`, `updated_at` — tracks auto-sync coordination (cursors, lease, backoff)
+- **sync_mutations** — `seq` (INTEGER PK AUTOINCREMENT), `entity`, `entity_key`, `op`, `payload` (JSON), `project` (TEXT), `occurred_at`, `acked_at` — append-only mutation journal for reliable cloud replication. The `project` column is populated at enqueue time from the entity payload.
+- **sync_enrolled_projects** — `project` (TEXT PK), `enrolled_at` — tracks which projects are enrolled for cloud sync. Only mutations belonging to enrolled projects are pushed to the cloud.
 
 ### SQLite Configuration
 
@@ -89,13 +111,28 @@ engram serve [port]       Start HTTP API server (default: 7437)
 engram mcp                Start MCP server (stdio transport)
 engram tui                Launch interactive terminal UI
 engram search <query>     Search memories [--type TYPE] [--project PROJECT] [--scope SCOPE] [--limit N]
+                            [--remote URL] [--token TOKEN]  Query cloud server instead of local DB
 engram save <title> <msg> Save a memory [--type TYPE] [--project PROJECT] [--scope SCOPE] [--topic TOPIC_KEY]
 engram timeline <obs_id>  Show chronological context around an observation [--before N] [--after N]
 engram context [project]  Show recent context from previous sessions
+                            [--remote URL] [--token TOKEN]  Query cloud server instead of local DB
 engram stats              Show memory system statistics
 engram export [file]      Export all memories to JSON (default: engram-export.json)
 engram import <file>      Import memories from a JSON export file
 engram sync               Export new memories as chunk [--import] [--status] [--project NAME] [--all]
+engram cloud serve        Start cloud server (Postgres backend)
+                            --port PORT          HTTP port (default: 8080)
+                            --database-url URL   Postgres DSN (or ENGRAM_DATABASE_URL env)
+engram cloud register     Register a new cloud account (--server URL required)
+engram cloud login        Login to an existing cloud account (--server URL required)
+engram cloud sync         Sync local mutations to cloud (push + pull)
+                            --legacy   Use legacy chunk-based sync (deprecated)
+engram cloud sync-status  Show local sync journal state (pending mutations, degraded state)
+engram cloud status       Show cloud sync status (local vs remote chunks, legacy)
+engram cloud api-key      Generate a new API key for the cloud server
+engram cloud enroll <p>   Enroll a project for cloud sync (only enrolled projects are pushed)
+engram cloud unenroll <p> Unenroll a project from cloud sync
+engram cloud projects     List projects currently enrolled for cloud sync
 engram version            Print version
 engram help               Show help
 ```
@@ -106,6 +143,14 @@ engram help               Show help
 |---|---|---|
 | `ENGRAM_DATA_DIR` | Override data directory | `~/.engram` |
 | `ENGRAM_PORT` | Override HTTP server port | `7437` |
+| `ENGRAM_REMOTE_URL` | Cloud server URL for `--remote` flag | (none) |
+| `ENGRAM_TOKEN` | Cloud auth token for `--token` flag | (none) |
+| `ENGRAM_DATABASE_URL` | Postgres DSN for `engram cloud serve` (preferred) | (none) |
+| `ENGRAM_JWT_SECRET` | JWT signing secret for `engram cloud serve` (preferred, >= 32 chars) | (none) |
+| `ENGRAM_CLOUD_DSN` | Legacy alias for `ENGRAM_DATABASE_URL` | `postgres://engram:engram_dev@localhost:5433/engram_cloud?sslmode=disable` |
+| `ENGRAM_CLOUD_JWT_SECRET` | Legacy alias for `ENGRAM_JWT_SECRET` | (none) |
+| `ENGRAM_CLOUD_CORS_ORIGINS` | Comma-separated CORS origins | `*` |
+| `ENGRAM_CLOUD_MAX_POOL` | Max Postgres connection pool size | `10` |
 
 ---
 
@@ -209,6 +254,10 @@ All endpoints return JSON. Server listens on `127.0.0.1:7437`.
 ### Stats
 
 - `GET /stats` — Memory statistics
+
+### Sync Status
+
+- `GET /sync/status` — Background sync status. Returns `{"enabled": false, ...}` when autosync is not configured, or `{"enabled": true, "phase": "...", "last_error": "...", "consecutive_failures": N, "backoff_until": "...", "last_sync_at": "..."}` when active.
 
 ---
 
@@ -505,6 +554,211 @@ The OpenCode plugin does NOT auto-capture raw tool calls. All memory comes from 
 
 The plugin still counts tool calls per session (for session end summary stats) but doesn't persist them as observations.
 
+### 9. Cloud Sync
+
+Sync memories across machines via a centralized Postgres-backed cloud server. Unlike Git Sync (which uses files committed to a repository), Cloud Sync uses an HTTP API with JWT authentication.
+
+**Auto-Sync (default)**: Long-lived processes (`engram serve`, `engram mcp`) automatically start a background sync manager when cloud credentials are configured (`~/.engram/cloud.json`). Every local write (save observation, end session, add prompt, etc.) triggers an immediate push/pull cycle — no manual `engram cloud sync` needed.
+
+**Architecture**:
+```
+Local Machine                              Cloud Server
+─────────────                              ────────────
+SQLite (~/.engram/engram.db)               Postgres (cloud_* tables)
+    ↓ write                                     ↑
+internal/store (mutation journal)          engram cloud serve
+    ↓ notify                                    ↑
+autosync.Manager ──── HTTP + JWT ─────→ CloudServer
+  (push mutations,    (Bearer token)     (auth + store)
+   pull by cursor)
+```
+
+**How it works**:
+1. Every write to SQLite (insert, update, soft-delete) appends a row to the `sync_mutations` journal with a monotonic sequence number.
+2. The autosync manager wakes on dirty notification (or a periodic poll) and pushes pending mutations (`last_acked_seq` → `last_enqueued_seq`).
+3. After push, it pulls remote mutations since `last_pulled_seq` and applies them locally with conflict resolution.
+4. On failure, the manager enters exponential backoff with jitter — local reads and writes are never blocked.
+
+**Sync status**: The HTTP server exposes `GET /sync/status` to inspect the background sync phase, error state, and last successful sync time. The CLI command `engram cloud sync-status` shows the local mutation journal state (pending mutations, degraded state, lease info).
+
+**Foreground sync**: `engram cloud sync` runs a single push/pull cycle using the same autosync engine (no background polling), then exits. This is useful for one-off syncs or CI scripts.
+
+**Legacy mode**: The previous chunk-based sync protocol is preserved behind `engram cloud sync --legacy`. This flag is deprecated and will be removed in a future version.
+
+**Project-Scoped Sync**:
+
+By default, all mutations are eligible for cloud push. Project-scoped sync lets you control which projects sync to the cloud — only enrolled projects are pushed, while non-enrolled data stays local-only.
+
+```bash
+# Enroll a project for cloud sync
+engram cloud enroll my-project
+
+# List enrolled projects
+engram cloud projects
+
+# Unenroll a project (stops syncing, existing cloud data stays)
+engram cloud unenroll my-project
+```
+
+How it works:
+- Each mutation in the local journal carries the `project` field extracted from the entity payload at enqueue time.
+- At push time, `ListPendingSyncMutations()` uses a SQL JOIN against `sync_enrolled_projects` to return only mutations from enrolled projects (plus empty-project mutations, which always sync).
+- The autosync manager runs a skip-ack pass before each push cycle, marking non-enrolled mutations as acknowledged without sending them. This prevents journal bloat from non-enrolled project writes accumulating indefinitely.
+- Enrollment/unenrollment is idempotent — enrolling an already-enrolled project is a no-op, unenrolling a non-enrolled project is a no-op.
+- Enrollment is a local-only operation (stored in `sync_enrolled_projects` SQLite table). The cloud server requires zero changes.
+
+**Cloud Server** (`engram cloud serve`):
+- Postgres backend with tsvector full-text search (weighted: title A, content B, type/project C)
+- JWT authentication (HMAC-SHA256, 1h access + 7d refresh tokens)
+- API key authentication (`eng_`-prefixed, SHA-256 hashed in storage)
+- Row-level user isolation — every query filters by `user_id`
+- Mutation-based sync (push pending mutations, pull by cursor) — replaces the chunk-based protocol
+- Body limit: 50 MB for push requests
+- Retry logic: exponential backoff (3 retries, 500ms base) for 429/5xx errors
+
+**Connectivity Contract**:
+
+Cloud mode keeps the client-side setup intentionally small:
+
+- One reachable base URL for the server, such as `https://engram.company.internal` or `http://10.0.0.15:8080`
+- One auth credential, usually the token Engram stores after `engram cloud login` or `engram cloud register`
+
+That same base URL + token pair powers both sync and direct remote queries:
+
+```bash
+engram cloud login --server https://engram.company.internal
+engram cloud sync
+
+engram search "auth middleware" --remote https://engram.company.internal --token <token>
+engram context myproject --remote https://engram.company.internal --token <token>
+```
+
+If you already ran `engram cloud login` or `engram cloud register`, Engram saves the server URL and token in `~/.engram/cloud.json`, so later `engram cloud sync` and remote CLI calls can reuse them automatically.
+
+**Deployment / Networking Options**:
+
+Engram does not require any specific tunnel, VPN, or ingress product. Use whatever your environment already trusts.
+
+1. **Existing company URL** — Best production path. Run `engram cloud serve` behind your normal DNS, TLS, and load balancer or gateway, then point clients at that URL.
+2. **LAN / VPN** — Good for internal teams. If each machine can already reach the host over office LAN, Tailscale, WireGuard, OpenVPN, ZeroTier, or an equivalent company VPN, just use that reachable server URL.
+3. **Reverse proxy in front of `engram cloud serve`** — Recommended when you want TLS termination, standard auth controls, or path/domain routing. Engram only needs the final externally reachable base URL.
+
+**Primary Workflow**:
+```bash
+# 1. Start the cloud server (needs Postgres)
+docker compose up -d
+export ENGRAM_DATABASE_URL="postgres://engram:engram_dev@localhost:5433/engram_cloud?sslmode=disable"
+export ENGRAM_JWT_SECRET="your-secret-at-least-32-characters-long"
+engram cloud serve
+
+# 2. Register an account
+engram cloud register --server http://localhost:8080
+
+# 3. Login (if already registered)
+engram cloud login --server http://localhost:8080
+
+# 4. Auto-sync: start the local server — background sync begins automatically
+engram serve
+# Every mem_save, session end, etc. now pushes/pulls automatically.
+
+# 5. Manual sync (one-off push/pull, no background process)
+engram cloud sync
+
+# 6. Check sync status
+engram cloud sync-status    # local journal state (pending mutations, degraded state)
+engram cloud status         # legacy chunk-based status
+
+# 7. Generate an API key (for CI/scripts)
+engram cloud api-key
+
+# 8. Enroll projects for selective sync (optional)
+engram cloud enroll my-project     # only 'my-project' mutations sync to cloud
+engram cloud enroll other-project  # add more projects
+engram cloud projects              # list enrolled projects
+engram cloud unenroll my-project   # stop syncing 'my-project'
+```
+
+**Quick Evaluation Fallback**:
+
+If you are just testing across machines and do not already have shared networking, expose a local `engram cloud serve` instance through any free tunnel or temporary ingress tool you trust, then use that temporary HTTPS URL as the `--server` / `--remote` value.
+
+- Treat this as evaluation infrastructure, not a required Engram dependency
+- The product contract stays the same: reachable base URL + token
+- For longer-lived environments, move to your normal LAN/VPN/reverse-proxy setup
+
+**Two-Machine Local Testing**:
+
+For the simplest local QA, use one machine as the temporary server host and a second machine as the client:
+
+1. On machine A, run Postgres + `engram cloud serve`.
+2. Make machine A reachable from machine B using whichever is easiest in your environment: same-LAN IP, VPN address, reverse proxy hostname, or a temporary free tunnel.
+3. On machine B, run `engram cloud register --server <reachable-url>` once, then `engram cloud sync`.
+4. Verify remote reads with `engram search ... --remote <reachable-url>` or `engram context ... --remote <reachable-url>`.
+
+**Cloud Config File** (`~/.engram/cloud.json`):
+
+After `register` or `login`, credentials are saved with `0600` permissions:
+```json
+{
+  "server_url": "http://localhost:8080",
+  "token": "<jwt-access-token>",
+  "refresh_token": "<jwt-refresh-token>",
+  "user_id": "<uuid>",
+  "username": "alan"
+}
+```
+
+Remote sync now uses the saved `refresh_token` automatically when the access token expires mid-sync. On a successful refresh, Engram rewrites `cloud.json` with the new access token before retrying the failed sync request.
+
+**docker-compose.yml** (included in the project root):
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: engram_cloud
+      POSTGRES_USER: engram
+      POSTGRES_PASSWORD: engram_dev
+    ports:
+      - "5433:5432"   # Port 5433 to avoid conflicts with local Postgres
+    volumes:
+      - engram_pg_data:/var/lib/postgresql/data
+```
+
+**Cloud HTTP API Endpoints**:
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/health` | No | Health check (`{"status":"ok","service":"engram-cloud"}`) |
+| `POST` | `/auth/register` | No | Register new user (username, email, password) |
+| `POST` | `/auth/login` | No | Login (username or email, password) -> JWT tokens |
+| `POST` | `/auth/refresh` | No | Refresh access token |
+| `POST` | `/auth/api-key` | Yes | Generate API key (`eng_`-prefixed) |
+| `DELETE` | `/auth/api-key` | Yes | Revoke API key |
+| `POST` | `/sync/mutations/push` | Yes | Push local mutations (array of entity/op/payload) |
+| `GET` | `/sync/mutations/pull` | Yes | Pull remote mutations (`?since_seq=N&limit=M`) |
+| `POST` | `/sync/push` | Yes | Push a chunk — legacy (sessions, observations, prompts) |
+| `GET` | `/sync/pull` | Yes | Get chunk manifest — legacy |
+| `GET` | `/sync/pull/{chunk_id}` | Yes | Download a specific chunk — legacy |
+| `GET` | `/sync/search` | Yes | Full-text search (`?q=QUERY&type=&project=&scope=&limit=`) |
+| `GET` | `/sync/context` | Yes | Formatted context (`?project=&scope=`) |
+
+**Security Notes**:
+- `ENGRAM_JWT_SECRET` must be at least 32 characters. Use a cryptographically random string in production.
+- The cloud server does NOT use HTTPS by default. In production, put it behind your normal reverse proxy, ingress, or load balancer with TLS termination.
+- API keys are stored as SHA-256 hashes — the plain key is shown only once at generation time.
+- Passwords are hashed with bcrypt (cost 10). Login uses constant-time comparison to prevent timing attacks.
+- All database queries include `WHERE user_id = $N` for row-level data isolation.
+- The `--remote` and `--token` flags (or `ENGRAM_REMOTE_URL` / `ENGRAM_TOKEN` env vars) also fall back to the saved `cloud.json` config for the token.
+
+**Postgres Schema** (auto-created on first `cloud serve` start):
+- `cloud_users` — UUID PK, unique username + email, bcrypt password, optional API key hash
+- `cloud_sessions` — composite PK (user_id, id), project, directory, timestamps, summary
+- `cloud_observations` — BIGSERIAL PK, user-scoped, tsvector GENERATED STORED column for FTS
+- `cloud_prompts` — BIGSERIAL PK, user-scoped, tsvector GENERATED STORED for FTS
+- `cloud_chunks` — raw chunk BYTEA storage, composite PK (user_id, chunk_id)
+- `cloud_sync_chunks` — tracks which chunks have been synced per user
+
 ---
 
 ## OpenCode Plugin
@@ -553,6 +807,9 @@ The `tool.execute.after` hook receives:
 - `github.com/charmbracelet/bubbletea v1.3.10` — Terminal UI framework
 - `github.com/charmbracelet/lipgloss v1.1.0` — Terminal styling
 - `github.com/charmbracelet/bubbles v1.0.0` — TUI components (textinput, etc.)
+- `github.com/lib/pq` — Postgres driver (for cloud server)
+- `github.com/golang-jwt/jwt/v5` — JWT token generation and validation (for cloud auth)
+- `golang.org/x/crypto` — bcrypt password hashing (for cloud auth)
 
 ### OpenCode Plugin
 
@@ -592,6 +849,9 @@ After `go install`: `$GOPATH/bin/engram` (typically `~/go/bin/engram`)
 6. **Pure Go SQLite (modernc.org/sqlite)** — No CGO means true cross-platform binary distribution.
 7. **No raw auto-capture** — Raw tool calls (edit, bash, etc.) are noisy, pollute search results, and bloat the database. The agent saves curated summaries via `mem_save` and `mem_session_summary` instead. Shell history and git provide the raw audit trail.
 8. **TUI with Bubbletea** — Interactive terminal UI for browsing memories without leaving the terminal. Follows Gentleman Bubbletea patterns (screen constants, single Model struct, vim keys).
+9. **Cloud Sync via Postgres** — Optional centralized sync with row-level user isolation. Postgres tsvector for full-text search (weighted: title > content > type/project).
+10. **Local-first auto-sync** — SQLite stays authoritative. A mutation journal (`sync_mutations`) records every write as an append-only log. Long-lived processes run a lease-guarded background manager that pushes/pulls mutations automatically. Cloud failures degrade gracefully (exponential backoff with jitter) — local reads and writes are never blocked. Legacy chunk-based sync preserved with `--legacy` flag for backward compatibility.
+11. **Project-scoped sync** — Enrollment-based filtering lets developers choose which projects sync to the cloud. A denormalized `project` column on `sync_mutations` enables SQL-level filtering at push time (no in-memory filtering). Non-enrolled mutations are skip-acked to prevent journal bloat. Empty-project mutations always sync. All filtering is client-side — the cloud server requires zero changes.
 
 ---
 
