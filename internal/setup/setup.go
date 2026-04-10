@@ -1,12 +1,12 @@
 // Package setup handles agent plugin installation.
 //
 //   - OpenCode: copies embedded plugin file to ~/.config/opencode/plugins/
-//     (patching ENGRAM_BIN to bake in the absolute binary path as a final
+//     (patching LORE_BIN to bake in the absolute binary path as a final
 //     fallback) and injects MCP registration in opencode.json using the
 //     resolved absolute binary path so child processes never require PATH
 //     resolution in headless/systemd environments.
 //   - Claude Code: runs `claude plugin marketplace add` + `claude plugin install`,
-//     then writes a durable MCP config to ~/.claude/mcp/engram.json using the
+//     then writes a durable MCP config to ~/.claude/mcp/lore.json using the
 //     absolute binary path so the subprocess never needs PATH resolution.
 //   - Gemini CLI: injects MCP registration in ~/.gemini/settings.json
 //   - Codex: injects MCP registration in ~/.codex/config.toml
@@ -67,47 +67,47 @@ type Result struct {
 	Files       int
 }
 
-const claudeCodeMarketplace = "Gentleman-Programming/engram"
+const claudeCodeMarketplace = "alferio94/lore"
 
-// claudeCodeMCPTools are the MCP tool names registered by the engram plugin
+// claudeCodeMCPTools are the MCP tool names registered by the lore plugin
 // in Claude Code. Adding these to ~/.claude/settings.json permissions.allow
 // prevents Claude Code from prompting for confirmation on every tool call.
 var claudeCodeMCPTools = []string{
-	"mcp__plugin_engram_engram__mem_capture_passive",
-	"mcp__plugin_engram_engram__mem_context",
-	"mcp__plugin_engram_engram__mem_get_observation",
-	"mcp__plugin_engram_engram__mem_save",
-	"mcp__plugin_engram_engram__mem_save_prompt",
-	"mcp__plugin_engram_engram__mem_search",
-	"mcp__plugin_engram_engram__mem_session_end",
-	"mcp__plugin_engram_engram__mem_session_start",
-	"mcp__plugin_engram_engram__mem_session_summary",
-	"mcp__plugin_engram_engram__mem_suggest_topic_key",
-	"mcp__plugin_engram_engram__mem_update",
+	"mcp__plugin_lore_lore__lore_capture_passive",
+	"mcp__plugin_lore_lore__lore_context",
+	"mcp__plugin_lore_lore__lore_get_observation",
+	"mcp__plugin_lore_lore__lore_save",
+	"mcp__plugin_lore_lore__lore_save_prompt",
+	"mcp__plugin_lore_lore__lore_search",
+	"mcp__plugin_lore_lore__lore_session_end",
+	"mcp__plugin_lore_lore__lore_session_start",
+	"mcp__plugin_lore_lore__lore_session_summary",
+	"mcp__plugin_lore_lore__lore_suggest_topic_key",
+	"mcp__plugin_lore_lore__lore_update",
 }
 
 // codexEngramBlock is the canonical Codex TOML MCP block.
-// Command is always the bare "engram" name in this constant because
+// Command is always the bare "lore" name in this constant because
 // upsertCodexEngramBlock generates the actual content via codexEngramBlockStr()
 // which uses resolveEngramCommand() at runtime. This constant is kept for tests
 // that verify idempotency against the already-written string when os.Executable
-// returns "engram" (fallback path).
-const codexEngramBlock = "[mcp_servers.engram]\ncommand = \"engram\"\nargs = [\"mcp\", \"--tools=agent\"]"
+// returns "lore" (fallback path).
+const codexEngramBlock = "[mcp_servers.lore]\ncommand = \"lore\"\nargs = [\"mcp\", \"--tools=agent\"]"
 
 // codexEngramBlockStr returns the Codex TOML block for the engram MCP server,
 // using the resolved absolute binary path from os.Executable().
 func codexEngramBlockStr() string {
 	cmd := resolveEngramCommand()
-	return "[mcp_servers.engram]\ncommand = " + fmt.Sprintf("%q", cmd) + "\nargs = [\"mcp\", \"--tools=agent\"]"
+	return "[mcp_servers.lore]\ncommand = " + fmt.Sprintf("%q", cmd) + "\nargs = [\"mcp\", \"--tools=agent\"]"
 }
 
-const memoryProtocolMarkdown = `## Engram Persistent Memory — Protocol
+const memoryProtocolMarkdown = `## Lore Persistent Memory — Protocol
 
-You have access to Engram, a persistent memory system that survives across sessions and compactions.
+You have access to Lore, a persistent memory system that survives across sessions and compactions.
 
 ### WHEN TO SAVE (mandatory — not optional)
 
-Call mem_save IMMEDIATELY after any of these:
+Call lore_save IMMEDIATELY after any of these:
 - Bug fix completed
 - Architecture or design decision made
 - Non-obvious discovery about the codebase
@@ -115,7 +115,7 @@ Call mem_save IMMEDIATELY after any of these:
 - Pattern established (naming, structure, convention)
 - User preference or constraint learned
 
-Format for mem_save:
+Format for lore_save:
 - **title**: Verb + what — short, searchable (e.g. "Fixed N+1 query in UserList", "Chose Zustand over Redux")
 - **type**: bugfix | decision | architecture | discovery | pattern | config | preference
 - **scope**: project (default) | personal
@@ -130,16 +130,16 @@ Format for mem_save:
 
 - Different topics must not overwrite each other (e.g. architecture vs bugfix)
 - Reuse the same topic_key to update an evolving topic instead of creating new observations
-- If unsure about the key, call mem_suggest_topic_key first and then reuse it
-- Use mem_update when you have an exact observation ID to correct
+- If unsure about the key, call lore_suggest_topic_key first and then reuse it
+- Use lore_update when you have an exact observation ID to correct
 
 ### WHEN TO SEARCH MEMORY
 
 When the user asks to recall something — any variation of "remember", "recall", "what did we do",
 "how did we solve", "recordar", "acordate", "qué hicimos", or references to past work:
-1. First call mem_context — checks recent session history (fast, cheap)
-2. If not found, call mem_search with relevant keywords (FTS5 full-text search)
-3. If you find a match, use mem_get_observation for full untruncated content
+1. First call lore_context — checks recent session history (fast, cheap)
+2. If not found, call lore_search with relevant keywords (FTS5 full-text search)
+3. If you find a match, use lore_get_observation for full untruncated content
 
 Also search memory PROACTIVELY when:
 - Starting work on something that might have been done before
@@ -148,7 +148,7 @@ Also search memory PROACTIVELY when:
 ### SESSION CLOSE PROTOCOL (mandatory)
 
 Before ending a session or saying "done" / "listo" / "that's it", you MUST:
-1. Call mem_session_summary with this structure:
+1. Call lore_session_summary with this structure:
 
 ## Goal
 [What we were working on this session]
@@ -173,7 +173,7 @@ This is NOT optional. If you skip this, the next session starts blind.
 ### PASSIVE CAPTURE — automatic learning extraction
 
 When completing a task or subtask, include a "## Key Learnings:" section at the end of your response
-with numbered items. Engram will automatically extract and save these as observations.
+with numbered items. Lore will automatically extract and save these as observations.
 
 Example:
 ## Key Learnings:
@@ -181,24 +181,24 @@ Example:
 1. bcrypt cost=12 is the right balance for our server performance
 2. JWT refresh tokens need atomic rotation to prevent race conditions
 
-You can also call mem_capture_passive(content) directly with any text that contains a learning section.
-This is a safety net — it captures knowledge even if you forget to call mem_save explicitly.
+You can also call lore_capture_passive(content) directly with any text that contains a learning section.
+This is a safety net — it captures knowledge even if you forget to call lore_save explicitly.
 
 ### AFTER COMPACTION
 
 If you see a message about compaction or context reset, or if you see "FIRST ACTION REQUIRED" in your context:
-1. IMMEDIATELY call mem_session_summary with the compacted summary content — this persists what was done before compaction
-2. Then call mem_context to recover any additional context from previous sessions
+1. IMMEDIATELY call lore_session_summary with the compacted summary content — this persists what was done before compaction
+2. Then call lore_context to recover any additional context from previous sessions
 3. Only THEN continue working
 
 Do not skip step 1. Without it, everything done before compaction is lost from memory.
 `
 
-const codexCompactPromptMarkdown = `You are compacting a coding session that uses Engram persistent memory.
+const codexCompactPromptMarkdown = `You are compacting a coding session that uses Lore persistent memory.
 
 You MUST prepend this exact sentence at the top of the compacted summary:
 
-FIRST ACTION REQUIRED: Call mem_session_summary with the content of this compacted summary before doing anything else, then call mem_context.
+FIRST ACTION REQUIRED: Call lore_session_summary with the content of this compacted summary before doing anything else, then call lore_context.
 
 After that sentence, summarize:
 - Goal
@@ -258,30 +258,30 @@ func Install(agentName string) (*Result, error) {
 //
 // Original line in source:
 //
-//	const ENGRAM_BIN = process.env.ENGRAM_BIN ?? "engram"
+//	const LORE_BIN = process.env.LORE_BIN ?? "lore"
 //
 // Patched line in installed copy:
 //
-//	const ENGRAM_BIN = process.env.ENGRAM_BIN ?? Bun.which("engram") ?? "/abs/path/engram"
+//	const LORE_BIN = process.env.LORE_BIN ?? Bun.which("lore") ?? "/abs/path/lore"
 //
 // Priority (left to right, first truthy wins):
-//  1. ENGRAM_BIN env var — explicit user override, always respected.
-//  2. Bun.which("engram") — runtime PATH lookup; works in interactive shells.
+//  1. LORE_BIN env var — explicit user override, always respected.
+//  2. Bun.which("lore") — runtime PATH lookup; works in interactive shells.
 //  3. Absolute baked-in path — works in headless/systemd where PATH is stripped.
 //
-// If absBin is already bare "engram" (os.Executable fallback) we don't add it
-// as the third fallback because it would be redundant with Bun.which("engram").
+// If absBin is already bare "lore" (os.Executable fallback) we don't add it
+// as the third fallback because it would be redundant with Bun.which("lore").
 func patchEngramBINLine(src []byte, absBin string) []byte {
-	const marker = `const ENGRAM_BIN = process.env.ENGRAM_BIN ?? "engram"`
+	const marker = `const LORE_BIN = process.env.LORE_BIN ?? "lore"`
 
 	var replacement string
-	if absBin == "engram" {
+	if absBin == "lore" {
 		// os.Executable failed — add Bun.which but no baked-in absolute path
-		replacement = `const ENGRAM_BIN = process.env.ENGRAM_BIN ?? Bun.which("engram") ?? "engram"`
+		replacement = `const LORE_BIN = process.env.LORE_BIN ?? Bun.which("lore") ?? "lore"`
 	} else {
 		// Normal case: bake in the absolute path as final fallback
 		replacement = fmt.Sprintf(
-			`const ENGRAM_BIN = process.env.ENGRAM_BIN ?? Bun.which("engram") ?? %q`,
+			`const LORE_BIN = process.env.LORE_BIN ?? Bun.which("lore") ?? %q`,
 			absBin,
 		)
 	}
@@ -295,32 +295,32 @@ func installOpenCode() (*Result, error) {
 		return nil, fmt.Errorf("create plugin dir %s: %w", dir, err)
 	}
 
-	data, err := openCodeReadFile("plugins/opencode/engram.ts")
+	data, err := openCodeReadFile("plugins/opencode/lore.ts")
 	if err != nil {
-		return nil, fmt.Errorf("read embedded engram.ts: %w", err)
+		return nil, fmt.Errorf("read embedded lore.ts: %w", err)
 	}
 
-	// Patch ENGRAM_BIN in the installed copy so the plugin can find the binary
+	// Patch LORE_BIN in the installed copy so the plugin can find the binary
 	// in headless/systemd environments where PATH may not include user tool dirs.
 	// The installed file gets a baked-in absolute path while still honoring
-	// process.env.ENGRAM_BIN (explicit user override) and Bun.which("engram")
+	// process.env.LORE_BIN (explicit user override) and Bun.which("lore")
 	// (runtime PATH lookup when PATH is available). The source plugin file is
 	// not modified — it keeps the simple env-var form for development flexibility.
 	data = patchEngramBINLine(data, resolveEngramCommand())
 
-	dest := filepath.Join(dir, "engram.ts")
+	dest := filepath.Join(dir, "lore.ts")
 	if err := openCodeWriteFileFn(dest, data, 0644); err != nil {
 		return nil, fmt.Errorf("write %s: %w", dest, err)
 	}
 
-	// Register engram MCP server in opencode.json
+	// Register lore MCP server in opencode.json
 	files := 1
 	if err := injectOpenCodeMCPFn(); err != nil {
 		// Non-fatal: plugin works, MCP just needs manual config
 		cmd := resolveEngramCommand()
 		fmt.Fprintf(os.Stderr, "warning: could not auto-register MCP server in opencode.json: %v\n", err)
 		fmt.Fprintf(os.Stderr, "  Add manually to your opencode.json under \"mcp\":\n")
-		fmt.Fprintf(os.Stderr, "  \"engram\": { \"type\": \"local\", \"command\": [%q, \"mcp\", \"--tools=agent\"], \"enabled\": true }\n", cmd)
+		fmt.Fprintf(os.Stderr, "  \"lore\": { \"type\": \"local\", \"command\": [%q, \"mcp\", \"--tools=agent\"], \"enabled\": true }\n", cmd)
 	} else {
 		files = 2
 	}
@@ -332,8 +332,8 @@ func installOpenCode() (*Result, error) {
 	}, nil
 }
 
-// injectOpenCodeMCP adds the engram MCP server entry to opencode.json.
-// It reads the existing config, adds/updates the engram entry under "mcp",
+// injectOpenCodeMCP adds the lore MCP server entry to opencode.json.
+// It reads the existing config, adds/updates the lore entry under "mcp",
 // and writes it back preserving all other settings.
 func injectOpenCodeMCP() error {
 	configPath := openCodeConfigPath()
@@ -364,12 +364,12 @@ func injectOpenCodeMCP() error {
 		mcpBlock = make(map[string]json.RawMessage)
 	}
 
-	// Check if engram is already registered
-	if _, exists := mcpBlock["engram"]; exists {
+	// Check if lore is already registered
+	if _, exists := mcpBlock["lore"]; exists {
 		return nil // already registered, nothing to do
 	}
 
-	// Add engram MCP entry (agent profile — only tools agents need).
+	// Add lore MCP entry (agent profile — only tools agents need).
 	// Use resolveEngramCommand() so Windows users (and headless Linux setups
 	// where PATH is not inherited) get the absolute binary path.
 	engramEntry := map[string]interface{}{
@@ -379,9 +379,9 @@ func injectOpenCodeMCP() error {
 	}
 	entryJSON, err := jsonMarshalFn(engramEntry)
 	if err != nil {
-		return fmt.Errorf("marshal engram entry: %w", err)
+		return fmt.Errorf("marshal lore entry: %w", err)
 	}
-	mcpBlock["engram"] = json.RawMessage(entryJSON)
+	mcpBlock["lore"] = json.RawMessage(entryJSON)
 
 	// Write mcp block back to config
 	mcpJSON, err := jsonMarshalFn(mcpBlock)
@@ -498,7 +498,7 @@ func installClaudeCode() (*Result, error) {
 	}
 
 	// Step 2: Install the plugin
-	installOut, err := runCommand(claudeBin, "plugin", "install", "engram")
+	installOut, err := runCommand(claudeBin, "plugin", "install", "lore")
 	installOutputStr := strings.TrimSpace(string(installOut))
 	if err != nil {
 		// If plugin is already installed, that's fine
@@ -507,15 +507,15 @@ func installClaudeCode() (*Result, error) {
 		}
 	}
 
-	// Step 3: Write a durable user-level MCP config at ~/.claude/mcp/engram.json
+	// Step 3: Write a durable user-level MCP config at ~/.claude/mcp/lore.json
 	// with the absolute binary path. This survives plugin cache auto-updates and
 	// works on Windows where MCP subprocesses may not inherit PATH.
 	files := 0
 	if err := writeClaudeCodeUserMCPFn(); err != nil {
 		// Non-fatal: the plugin still works via the plugin cache .mcp.json.
 		// Warn so Windows users know to check their PATH if tools don't appear.
-		fmt.Fprintf(os.Stderr, "warning: could not write user MCP config (~/.claude/mcp/engram.json): %v\n", err)
-		fmt.Fprintf(os.Stderr, "  The plugin is installed but MCP may not start on Windows if engram is not in PATH.\n")
+		fmt.Fprintf(os.Stderr, "warning: could not write user MCP config (~/.claude/mcp/lore.json): %v\n", err)
+		fmt.Fprintf(os.Stderr, "  The plugin is installed but MCP may not start on Windows if lore is not in PATH.\n")
 	} else {
 		files = 1
 	}
@@ -534,14 +534,14 @@ func claudeCodeMCPDir() string {
 	return filepath.Join(home, ".claude", "mcp")
 }
 
-// claudeCodeUserMCPPath returns the path for the engram MCP config in the
+// claudeCodeUserMCPPath returns the path for the lore MCP config in the
 // user-level MCP directory.
 func claudeCodeUserMCPPath() string {
-	return filepath.Join(claudeCodeMCPDir(), "engram.json")
+	return filepath.Join(claudeCodeMCPDir(), "lore.json")
 }
 
-// writeClaudeCodeUserMCP writes ~/.claude/mcp/engram.json with the absolute
-// path to the engram binary. This is idempotent — it always writes (overwrites)
+// writeClaudeCodeUserMCP writes ~/.claude/mcp/lore.json with the absolute
+// path to the lore binary. This is idempotent — it always writes (overwrites)
 // so that if the binary moves (e.g. brew upgrade), running setup again fixes it.
 // Using os.Executable() instead of PATH lookup ensures the correct binary is
 // referenced even when PATH is not propagated to MCP subprocesses (Windows).
@@ -581,7 +581,7 @@ func claudeCodeSettingsPath() string {
 	return filepath.Join(home, ".claude", "settings.json")
 }
 
-// AddClaudeCodeAllowlist adds engram MCP tool names to ~/.claude/settings.json
+// AddClaudeCodeAllowlist adds lore MCP tool names to ~/.claude/settings.json
 // permissions.allow so Claude Code doesn't prompt for confirmation on each call.
 // Idempotent: skips tools already present in the list.
 func AddClaudeCodeAllowlist() error {
@@ -728,9 +728,9 @@ func injectGeminiMCP(configPath string) error {
 	}
 	entryJSON, err := jsonMarshalFn(engramEntry)
 	if err != nil {
-		return fmt.Errorf("marshal engram entry: %w", err)
+		return fmt.Errorf("marshal lore entry: %w", err)
 	}
-	mcpServers["engram"] = json.RawMessage(entryJSON)
+	mcpServers["lore"] = json.RawMessage(entryJSON)
 
 	mcpJSON, err := jsonMarshalFn(mcpServers)
 	if err != nil {
@@ -754,11 +754,11 @@ func injectGeminiMCP(configPath string) error {
 // It uses os.Executable() so that headless/systemd environments (where PATH
 // is not reliably inherited by child processes) still find the binary.
 // EvalSymlinks makes the path stable across package-manager upgrades.
-// Falls back to bare "engram" only if os.Executable() itself fails.
+// Falls back to bare "lore" only if os.Executable() itself fails.
 func resolveEngramCommand() string {
 	exe, err := osExecutable()
 	if err != nil {
-		return "engram" // fallback to PATH-based name
+		return "lore" // fallback to PATH-based name
 	}
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
@@ -780,7 +780,7 @@ func writeGeminiSystemPrompt() error {
 }
 
 // removeGeminiEnvOverride removes any GEMINI_SYSTEM_MD line from ~/.gemini/.env.
-// Previous versions of engram added this line, but it causes Gemini CLI to look
+// Previous versions of lore added this line, but it causes Gemini CLI to look
 // for system.md relative to CWD instead of ~/.gemini/. Best-effort cleanup.
 func removeGeminiEnvOverride() {
 	envPath := geminiEnvPath()
@@ -900,7 +900,7 @@ func upsertCodexEngramBlock(content string) string {
 	var kept []string
 	for i := 0; i < len(lines); {
 		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == "[mcp_servers.engram]" {
+		if trimmed == "[mcp_servers.lore]" {
 			i++
 			for i < len(lines) {
 				next := strings.TrimSpace(lines[i])
@@ -999,9 +999,9 @@ func codexConfigPath() string {
 }
 
 func codexInstructionsPath() string {
-	return filepath.Join(filepath.Dir(codexConfigPath()), "engram-instructions.md")
+	return filepath.Join(filepath.Dir(codexConfigPath()), "lore-instructions.md")
 }
 
 func codexCompactPromptPath() string {
-	return filepath.Join(filepath.Dir(codexConfigPath()), "engram-compact-prompt.md")
+	return filepath.Join(filepath.Dir(codexConfigPath()), "lore-compact-prompt.md")
 }

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Gentleman-Programming/engram/internal/store"
+	"github.com/alferio94/lore/internal/store"
 	mcppkg "github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -925,10 +925,10 @@ func TestResolveToolsAgentProfile(t *testing.T) {
 	}
 
 	expectedTools := []string{
-		"mem_save", "mem_search", "mem_context", "mem_session_summary",
-		"mem_session_start", "mem_session_end", "mem_get_observation",
-		"mem_suggest_topic_key", "mem_capture_passive", "mem_save_prompt",
-		"mem_update", // skills explicitly say "use mem_update when you have an exact ID to correct"
+		"lore_save", "lore_search", "lore_context", "lore_session_summary",
+		"lore_session_start", "lore_session_end", "lore_get_observation",
+		"lore_suggest_topic_key", "lore_capture_passive", "lore_save_prompt",
+		"lore_update", // skills explicitly say "use lore_update when you have an exact ID to correct"
 	}
 	for _, tool := range expectedTools {
 		if !result[tool] {
@@ -937,7 +937,7 @@ func TestResolveToolsAgentProfile(t *testing.T) {
 	}
 
 	// Admin-only tools should NOT be in agent profile
-	adminOnly := []string{"mem_delete", "mem_stats", "mem_timeline"}
+	adminOnly := []string{"lore_delete", "lore_stats", "lore_timeline"}
 	for _, tool := range adminOnly {
 		if result[tool] {
 			t.Errorf("agent profile should NOT contain admin tool: %s", tool)
@@ -955,7 +955,7 @@ func TestResolveToolsAdminProfile(t *testing.T) {
 		t.Fatal("expected non-nil allowlist for 'admin'")
 	}
 
-	expectedTools := []string{"mem_delete", "mem_stats", "mem_timeline", "mem_merge_projects"}
+	expectedTools := []string{"lore_delete", "lore_stats", "lore_timeline", "lore_merge_projects"}
 	for _, tool := range expectedTools {
 		if !result[tool] {
 			t.Errorf("admin profile missing tool: %s", tool)
@@ -975,10 +975,10 @@ func TestResolveToolsCombinedProfiles(t *testing.T) {
 
 	// Should have all 15 tools
 	allTools := []string{
-		"mem_save", "mem_search", "mem_context", "mem_session_summary",
-		"mem_session_start", "mem_session_end", "mem_get_observation",
-		"mem_suggest_topic_key", "mem_capture_passive", "mem_save_prompt",
-		"mem_update", "mem_delete", "mem_stats", "mem_timeline", "mem_merge_projects",
+		"lore_save", "lore_search", "lore_context", "lore_session_summary",
+		"lore_session_start", "lore_session_end", "lore_get_observation",
+		"lore_suggest_topic_key", "lore_capture_passive", "lore_save_prompt",
+		"lore_update", "lore_delete", "lore_stats", "lore_timeline", "lore_merge_projects",
 	}
 	for _, tool := range allTools {
 		if !result[tool] {
@@ -988,13 +988,13 @@ func TestResolveToolsCombinedProfiles(t *testing.T) {
 }
 
 func TestResolveToolsIndividualNames(t *testing.T) {
-	result := ResolveTools("mem_save,mem_search")
+	result := ResolveTools("lore_save,lore_search")
 	if result == nil {
 		t.Fatal("expected non-nil allowlist")
 	}
 
-	if !result["mem_save"] || !result["mem_search"] {
-		t.Fatalf("expected mem_save and mem_search, got %v", result)
+	if !result["lore_save"] || !result["lore_search"] {
+		t.Fatalf("expected lore_save and lore_search, got %v", result)
 	}
 
 	if len(result) != 2 {
@@ -1003,20 +1003,20 @@ func TestResolveToolsIndividualNames(t *testing.T) {
 }
 
 func TestResolveToolsMixedProfileAndNames(t *testing.T) {
-	result := ResolveTools("admin,mem_save")
+	result := ResolveTools("admin,lore_save")
 	if result == nil {
 		t.Fatal("expected non-nil allowlist")
 	}
 
-	// Should have admin tools + mem_save
-	if !result["mem_save"] {
-		t.Error("missing mem_save")
+	// Should have admin tools + lore_save
+	if !result["lore_save"] {
+		t.Error("missing lore_save")
 	}
-	if !result["mem_stats"] {
-		t.Error("missing mem_stats from admin profile")
+	if !result["lore_stats"] {
+		t.Error("missing lore_stats from admin profile")
 	}
-	if !result["mem_timeline"] {
-		t.Error("missing mem_timeline from admin profile")
+	if !result["lore_timeline"] {
+		t.Error("missing lore_timeline from admin profile")
 	}
 }
 
@@ -1032,33 +1032,33 @@ func TestResolveToolsWhitespace(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected non-nil for agent with whitespace")
 	}
-	if !result["mem_save"] {
-		t.Error("agent profile should include mem_save")
+	if !result["lore_save"] {
+		t.Error("agent profile should include lore_save")
 	}
 }
 
 func TestResolveToolsCommaWhitespace(t *testing.T) {
-	result := ResolveTools("mem_save , mem_search")
+	result := ResolveTools("lore_save , lore_search")
 	if result == nil {
 		t.Fatal("expected non-nil allowlist")
 	}
-	if !result["mem_save"] || !result["mem_search"] {
+	if !result["lore_save"] || !result["lore_search"] {
 		t.Fatalf("expected both tools, got %v", result)
 	}
 }
 
 func TestResolveToolsEmptyTokenBetweenCommas(t *testing.T) {
-	result := ResolveTools("mem_save,,mem_search")
+	result := ResolveTools("lore_save,,lore_search")
 	if result == nil {
 		t.Fatal("expected non-nil allowlist")
 	}
-	if !result["mem_save"] || !result["mem_search"] {
-		t.Fatalf("expected mem_save and mem_search in result, got %v", result)
+	if !result["lore_save"] || !result["lore_search"] {
+		t.Fatalf("expected lore_save and lore_search in result, got %v", result)
 	}
 }
 
 func TestResolveToolsAllAfterRealTool(t *testing.T) {
-	result := ResolveTools("mem_save,all")
+	result := ResolveTools("lore_save,all")
 	if result != nil {
 		t.Fatalf("expected nil when 'all' appears anywhere in list, got %v", result)
 	}
@@ -1078,13 +1078,13 @@ func TestShouldRegisterNilAllowlist(t *testing.T) {
 }
 
 func TestShouldRegisterWithAllowlist(t *testing.T) {
-	allowlist := map[string]bool{"mem_save": true, "mem_search": true}
+	allowlist := map[string]bool{"lore_save": true, "lore_search": true}
 
-	if !shouldRegister("mem_save", allowlist) {
-		t.Error("mem_save should be allowed")
+	if !shouldRegister("lore_save", allowlist) {
+		t.Error("lore_save should be allowed")
 	}
-	if shouldRegister("mem_delete", allowlist) {
-		t.Error("mem_delete should NOT be allowed")
+	if shouldRegister("lore_delete", allowlist) {
+		t.Error("lore_delete should NOT be allowed")
 	}
 }
 
@@ -1101,10 +1101,10 @@ func TestNewServerWithToolsAgentProfile(t *testing.T) {
 
 	// Agent tools should be present (11 tools)
 	agentTools := []string{
-		"mem_save", "mem_search", "mem_context", "mem_session_summary",
-		"mem_session_start", "mem_session_end", "mem_get_observation",
-		"mem_suggest_topic_key", "mem_capture_passive", "mem_save_prompt",
-		"mem_update",
+		"lore_save", "lore_search", "lore_context", "lore_session_summary",
+		"lore_session_start", "lore_session_end", "lore_get_observation",
+		"lore_suggest_topic_key", "lore_capture_passive", "lore_save_prompt",
+		"lore_update",
 	}
 	for _, name := range agentTools {
 		if tools[name] == nil {
@@ -1113,7 +1113,7 @@ func TestNewServerWithToolsAgentProfile(t *testing.T) {
 	}
 
 	// Admin-only tools should NOT be present
-	adminTools := []string{"mem_delete", "mem_stats", "mem_timeline"}
+	adminTools := []string{"lore_delete", "lore_stats", "lore_timeline"}
 	for _, name := range adminTools {
 		if tools[name] != nil {
 			t.Errorf("agent profile: tool %q should NOT be registered", name)
@@ -1133,7 +1133,7 @@ func TestNewServerWithToolsAdminProfile(t *testing.T) {
 	tools := srv.ListTools()
 
 	// Admin tools should be present (4 tools)
-	adminTools := []string{"mem_delete", "mem_stats", "mem_timeline", "mem_merge_projects"}
+	adminTools := []string{"lore_delete", "lore_stats", "lore_timeline", "lore_merge_projects"}
 	for _, name := range adminTools {
 		if tools[name] == nil {
 			t.Errorf("admin profile: expected tool %q to be registered", name)
@@ -1141,7 +1141,7 @@ func TestNewServerWithToolsAdminProfile(t *testing.T) {
 	}
 
 	// Agent-only tools should NOT be present
-	agentOnlyTools := []string{"mem_save", "mem_search", "mem_context", "mem_update"}
+	agentOnlyTools := []string{"lore_save", "lore_search", "lore_context", "lore_update"}
 	for _, name := range agentOnlyTools {
 		if tools[name] != nil {
 			t.Errorf("admin profile: tool %q should NOT be registered", name)
@@ -1160,10 +1160,10 @@ func TestNewServerWithToolsNilRegistersAll(t *testing.T) {
 	tools := srv.ListTools()
 
 	allTools := []string{
-		"mem_save", "mem_search", "mem_context", "mem_session_summary",
-		"mem_session_start", "mem_session_end", "mem_get_observation",
-		"mem_suggest_topic_key", "mem_capture_passive", "mem_save_prompt",
-		"mem_update", "mem_delete", "mem_stats", "mem_timeline", "mem_merge_projects",
+		"lore_save", "lore_search", "lore_context", "lore_session_summary",
+		"lore_session_start", "lore_session_end", "lore_get_observation",
+		"lore_suggest_topic_key", "lore_capture_passive", "lore_save_prompt",
+		"lore_update", "lore_delete", "lore_stats", "lore_timeline", "lore_merge_projects",
 	}
 
 	for _, name := range allTools {
@@ -1179,16 +1179,16 @@ func TestNewServerWithToolsNilRegistersAll(t *testing.T) {
 
 func TestNewServerWithToolsIndividualSelection(t *testing.T) {
 	s := newMCPTestStore(t)
-	allowlist := ResolveTools("mem_save,mem_search")
+	allowlist := ResolveTools("lore_save,lore_search")
 
 	srv := NewServerWithTools(s, allowlist)
 	tools := srv.ListTools()
 
-	if tools["mem_save"] == nil {
-		t.Error("expected mem_save to be registered")
+	if tools["lore_save"] == nil {
+		t.Error("expected lore_save to be registered")
 	}
-	if tools["mem_search"] == nil {
-		t.Error("expected mem_search to be registered")
+	if tools["lore_search"] == nil {
+		t.Error("expected lore_search to be registered")
 	}
 	if len(tools) != 2 {
 		t.Errorf("expected exactly 2 tools, got %d", len(tools))
@@ -1237,7 +1237,7 @@ func TestServerInstructionsConstantIsNonEmpty(t *testing.T) {
 		t.Fatal("serverInstructions should not be empty — it drives Tool Search discovery")
 	}
 	// Must mention key tool names so Tool Search can index them
-	for _, keyword := range []string{"mem_save", "mem_search", "mem_context", "mem_session_summary"} {
+	for _, keyword := range []string{"lore_save", "lore_search", "lore_context", "lore_session_summary"} {
 		if !strings.Contains(serverInstructions, keyword) {
 			t.Errorf("serverInstructions should mention %q for Tool Search indexing", keyword)
 		}
@@ -1252,8 +1252,8 @@ func TestCoreToolsAreNotDeferred(t *testing.T) {
 	tools := srv.ListTools()
 
 	coreTools := []string{
-		"mem_save", "mem_search", "mem_context", "mem_session_summary",
-		"mem_get_observation", "mem_save_prompt",
+		"lore_save", "lore_search", "lore_context", "lore_session_summary",
+		"lore_get_observation", "lore_save_prompt",
 	}
 	for _, name := range coreTools {
 		tool := tools[name]
@@ -1273,10 +1273,10 @@ func TestNonCoreToolsAreDeferred(t *testing.T) {
 	tools := srv.ListTools()
 
 	deferredTools := []string{
-		"mem_update", "mem_suggest_topic_key",
-		"mem_session_start", "mem_session_end",
-		"mem_stats", "mem_delete", "mem_timeline",
-		"mem_capture_passive", "mem_merge_projects",
+		"lore_update", "lore_suggest_topic_key",
+		"lore_session_start", "lore_session_end",
+		"lore_stats", "lore_delete", "lore_timeline",
+		"lore_capture_passive", "lore_merge_projects",
 	}
 	for _, name := range deferredTools {
 		tool := tools[name]
@@ -1316,8 +1316,8 @@ func TestReadOnlyToolAnnotations(t *testing.T) {
 	tools := srv.ListTools()
 
 	readOnlyTools := []string{
-		"mem_search", "mem_context", "mem_get_observation",
-		"mem_suggest_topic_key", "mem_stats", "mem_timeline",
+		"lore_search", "lore_context", "lore_get_observation",
+		"lore_suggest_topic_key", "lore_stats", "lore_timeline",
 	}
 	for _, name := range readOnlyTools {
 		tool := tools[name]
@@ -1494,16 +1494,16 @@ func TestDestructiveToolAnnotation(t *testing.T) {
 	srv := NewServer(s)
 	tools := srv.ListTools()
 
-	tool := tools["mem_delete"]
+	tool := tools["lore_delete"]
 	if tool == nil {
-		t.Fatal("mem_delete should be registered")
+		t.Fatal("lore_delete should be registered")
 	}
 	ann := tool.Tool.Annotations
 	if ann.DestructiveHint == nil || !*ann.DestructiveHint {
-		t.Error("mem_delete should be marked destructive")
+		t.Error("lore_delete should be marked destructive")
 	}
 	if ann.ReadOnlyHint == nil || *ann.ReadOnlyHint {
-		t.Error("mem_delete should NOT be marked readOnly")
+		t.Error("lore_delete should NOT be marked readOnly")
 	}
 }
 
@@ -1772,15 +1772,15 @@ func TestHandleMergeProjectsIsInAdminProfile(t *testing.T) {
 	srv := NewServerWithTools(s, allowlist)
 	tools := srv.ListTools()
 
-	if tools["mem_merge_projects"] == nil {
-		t.Fatal("mem_merge_projects should be in admin profile")
+	if tools["lore_merge_projects"] == nil {
+		t.Fatal("lore_merge_projects should be in admin profile")
 	}
 
 	// Verify it's marked destructive
-	tool := tools["mem_merge_projects"]
+	tool := tools["lore_merge_projects"]
 	ann := tool.Tool.Annotations
 	if ann.DestructiveHint == nil || !*ann.DestructiveHint {
-		t.Error("mem_merge_projects should be marked destructive")
+		t.Error("lore_merge_projects should be marked destructive")
 	}
 }
 
@@ -1789,12 +1789,12 @@ func TestHandleMergeProjectsIsDeferred(t *testing.T) {
 	srv := NewServer(s)
 	tools := srv.ListTools()
 
-	tool := tools["mem_merge_projects"]
+	tool := tools["lore_merge_projects"]
 	if tool == nil {
-		t.Fatal("mem_merge_projects should be registered")
+		t.Fatal("lore_merge_projects should be registered")
 	}
 	if !tool.Tool.DeferLoading {
-		t.Error("mem_merge_projects should have DeferLoading=true")
+		t.Error("lore_merge_projects should have DeferLoading=true")
 	}
 }
 

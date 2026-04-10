@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Gentleman-Programming/engram/internal/version"
+	"github.com/alferio94/lore/internal/version"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -50,7 +50,7 @@ func renderLogo(version string) string {
 	b.WriteString("\n")
 
 	// Footer inside box
-	b.WriteString(taglineStyle.Render(" > engram " + version + " — An elephant never forgets"))
+	b.WriteString(taglineStyle.Render(" > lore " + version + " — An elephant never forgets"))
 
 	return frameStyle.Render(b.String()) + "\n"
 }
@@ -594,7 +594,7 @@ func (m Model) viewSetup() string {
 
 		b.WriteString(sectionHeadingStyle.Render("  Permissions Allowlist"))
 		b.WriteString("\n\n")
-		b.WriteString(detailContentStyle.Render("  Add engram tools to ~/.claude/settings.json allowlist?"))
+		b.WriteString(detailContentStyle.Render("  Add lore tools to ~/.claude/settings.json allowlist?"))
 		b.WriteString("\n")
 		b.WriteString(timestampStyle.Render("  This prevents Claude Code from asking permission on every tool call."))
 		b.WriteString("\n\n")
@@ -628,7 +628,7 @@ func (m Model) viewSetup() string {
 				b.WriteString("\n")
 				b.WriteString(detailContentStyle.Render("2. Plugin is auto-loaded from ~/.config/opencode/plugins/"))
 				b.WriteString("\n")
-				b.WriteString(detailContentStyle.Render("3. Make sure 'engram' is in your MCP config (opencode.json)"))
+				b.WriteString(detailContentStyle.Render("3. Make sure 'lore' is in your MCP config (opencode.json)"))
 				b.WriteString("\n")
 			case "claude-code":
 				b.WriteString(sectionHeadingStyle.Render("  Next Steps"))
@@ -636,7 +636,7 @@ func (m Model) viewSetup() string {
 				if m.SetupAllowlistApplied {
 					b.WriteString(fmt.Sprintf("  %s %s\n",
 						lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render("✓"),
-						detailContentStyle.Render("Engram tools added to allowlist")))
+						detailContentStyle.Render("Lore tools added to allowlist")))
 				} else if m.SetupAllowlistError != "" {
 					b.WriteString(fmt.Sprintf("  %s %s\n",
 						lipgloss.NewStyle().Bold(true).Foreground(colorRed).Render("✗"),

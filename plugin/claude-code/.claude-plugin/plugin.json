@@ -1,11 +1,11 @@
 {
-  "name": "engram",
+  "name": "lore",
   "description": "Persistent memory for AI coding agents. Survives across sessions and compactions.",
   "version": "0.1.0",
   "author": {
-    "name": "Gentleman Programming"
+    "name": "alferio94"
   },
-  "homepage": "https://github.com/Gentleman-Programming/engram",
-  "repository": "https://github.com/Gentleman-Programming/engram",
+  "homepage": "https://github.com/alferio94/lore",
+  "repository": "https://github.com/alferio94/lore",
   "license": "MIT"
 }

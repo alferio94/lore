@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Gentleman-Programming/engram/internal/setup"
-	"github.com/Gentleman-Programming/engram/internal/store"
-	"github.com/Gentleman-Programming/engram/internal/version"
+	"github.com/alferio94/lore/internal/setup"
+	"github.com/alferio94/lore/internal/store"
+	"github.com/alferio94/lore/internal/version"
 )
 
 func TestTruncateStr(t *testing.T) {
@@ -145,7 +145,7 @@ func TestViewDashboardSearchAndRecent(t *testing.T) {
 	}
 
 	out := m.viewDashboard()
-	if !strings.Contains(out, "engram") || !strings.Contains(out, "Actions") {
+	if !strings.Contains(out, "lore") || !strings.Contains(out, "Actions") {
 		t.Fatal("dashboard should include header and actions")
 	}
 	if !strings.Contains(out, "...and 1 more projects") {

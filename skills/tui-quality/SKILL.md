@@ -1,7 +1,7 @@
 ---
-name: engram-tui-quality
+name: lore-tui-quality
 description: >
-  Bubbletea/Lipgloss quality rules for Engram TUI.
+  Bubbletea/Lipgloss quality rules for Lore TUI.
   Trigger: Changes in model, update, view, navigation, or rendering.
 license: Apache-2.0
 metadata:

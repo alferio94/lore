@@ -15,18 +15,18 @@
 ## Homebrew (macOS / Linux)
 
 ```bash
-brew install gentleman-programming/tap/engram
+brew install alferio94/tap/lore
 ```
 
 Upgrade to latest:
 
 ```bash
-brew update && brew upgrade engram
+brew update && brew upgrade lore
 ```
 
-> **Migrating from Cask?** If you installed engram before v1.0.1, it was distributed as a Cask. Uninstall first, then reinstall:
+> **Migrating from Cask?** If you installed lore before v1.0.1, it was distributed as a Cask. Uninstall first, then reinstall:
 > ```bash
-> brew uninstall --cask engram 2>/dev/null; brew install gentleman-programming/tap/engram
+> brew uninstall --cask lore 2>/dev/null; brew install alferio94/tap/lore
 > ```
 
 ---
@@ -38,8 +38,8 @@ brew update && brew upgrade engram
 If you have Go installed, this is the cleanest and most trustworthy path — the binary is compiled on your machine from source, so no antivirus will flag it:
 
 ```powershell
-go install github.com/Gentleman-Programming/engram/cmd/engram@latest
-# Binary goes to %GOPATH%\bin\engram.exe (typically %USERPROFILE%\go\bin\)
+go install github.com/alferio94/lore/cmd/lore@latest
+# Binary goes to %GOPATH%\bin\lore.exe (typically %USERPROFILE%\go\bin\)
 ```
 
 Ensure `%GOPATH%\bin` (or `%USERPROFILE%\go\bin`) is on your `PATH`.
@@ -47,25 +47,25 @@ Ensure `%GOPATH%\bin` (or `%USERPROFILE%\go\bin`) is on your `PATH`.
 **Option B: Build from source**
 
 ```powershell
-git clone https://github.com/Gentleman-Programming/engram.git
-cd engram
-go install ./cmd/engram
-# Binary goes to %GOPATH%\bin\engram.exe (typically %USERPROFILE%\go\bin\)
+git clone https://github.com/alferio94/lore.git
+cd lore
+go install ./cmd/lore
+# Binary goes to %GOPATH%\bin\lore.exe (typically %USERPROFILE%\go\bin\)
 
-# Optional: build with version stamp (otherwise `engram version` shows "dev")
+# Optional: build with version stamp (otherwise `lore version` shows "dev")
 $v = git describe --tags --always
-go build -ldflags="-X main.version=local-$v" -o engram.exe ./cmd/engram
+go build -ldflags="-X main.version=local-$v" -o lore.exe ./cmd/lore
 ```
 
 **Option C: Download the prebuilt binary**
 
-1. Go to [GitHub Releases](https://github.com/Gentleman-Programming/engram/releases)
-2. Download `engram_<version>_windows_amd64.zip` (or `arm64` for ARM devices)
-3. Extract `engram.exe` to a folder in your `PATH` (e.g. `C:\Users\<you>\bin\`)
+1. Go to [GitHub Releases](https://github.com/alferio94/lore/releases)
+2. Download `lore_<version>_windows_amd64.zip` (or `arm64` for ARM devices)
+3. Extract `lore.exe` to a folder in your `PATH` (e.g. `C:\Users\<you>\bin\`)
 
 ```powershell
 # Example: extract and add to PATH (PowerShell)
-Expand-Archive engram_*_windows_amd64.zip -DestinationPath "$env:USERPROFILE\bin"
+Expand-Archive lore_*_windows_amd64.zip -DestinationPath "$env:USERPROFILE\bin"
 # Add to PATH permanently (run once):
 [Environment]::SetEnvironmentVariable("Path", "$env:USERPROFILE\bin;" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")
 ```
@@ -73,7 +73,7 @@ Expand-Archive engram_*_windows_amd64.zip -DestinationPath "$env:USERPROFILE\bin
 > **Antivirus false positives on prebuilt binaries**
 >
 > Windows Defender and other antivirus tools (ESET, Brave's built-in scanner) have flagged some
-> engram prebuilt releases as malware (`Trojan:Script/Wacatac.H!ml` or similar). This is a
+> lore prebuilt releases as malware (`Trojan:Script/Wacatac.H!ml` or similar). This is a
 > **heuristic false positive**. The binary is built reproducibly from the public source code
 > via GoReleaser and contains no malicious code.
 >
@@ -91,8 +91,8 @@ Expand-Archive engram_*_windows_amd64.zip -DestinationPath "$env:USERPROFILE\bin
 > they originate from your own machine.
 
 > **Other Windows notes:**
-> - Data is stored in `%USERPROFILE%\.engram\engram.db`
-> - Override with `ENGRAM_DATA_DIR` environment variable
+> - Data is stored in `%USERPROFILE%\.lore\lore.db`
+> - Override with `LORE_DATA_DIR` environment variable
 > - All core features work natively: CLI, MCP server, TUI, HTTP API, Git Sync
 > - No WSL required for the core binary — it's a native Windows executable
 
@@ -101,28 +101,28 @@ Expand-Archive engram_*_windows_amd64.zip -DestinationPath "$env:USERPROFILE\bin
 ## Install from source (macOS / Linux)
 
 ```bash
-git clone https://github.com/Gentleman-Programming/engram.git
-cd engram
-go install ./cmd/engram
+git clone https://github.com/alferio94/lore.git
+cd lore
+go install ./cmd/lore
 
-# Optional: build with version stamp (otherwise `engram version` shows "dev")
-go build -ldflags="-X main.version=local-$(git describe --tags --always)" -o engram ./cmd/engram
+# Optional: build with version stamp (otherwise `lore version` shows "dev")
+go build -ldflags="-X main.version=local-$(git describe --tags --always)" -o lore ./cmd/lore
 ```
 
 ---
 
 ## Download binary (all platforms)
 
-Grab the latest release for your platform from [GitHub Releases](https://github.com/Gentleman-Programming/engram/releases).
+Grab the latest release for your platform from [GitHub Releases](https://github.com/alferio94/lore/releases).
 
 | Platform | File |
 |----------|------|
-| macOS (Apple Silicon) | `engram_<version>_darwin_arm64.tar.gz` |
-| macOS (Intel) | `engram_<version>_darwin_amd64.tar.gz` |
-| Linux (x86_64) | `engram_<version>_linux_amd64.tar.gz` |
-| Linux (ARM64) | `engram_<version>_linux_arm64.tar.gz` |
-| Windows (x86_64) | `engram_<version>_windows_amd64.zip` |
-| Windows (ARM64) | `engram_<version>_windows_arm64.zip` |
+| macOS (Apple Silicon) | `lore_<version>_darwin_arm64.tar.gz` |
+| macOS (Intel) | `lore_<version>_darwin_amd64.tar.gz` |
+| Linux (x86_64) | `lore_<version>_linux_amd64.tar.gz` |
+| Linux (ARM64) | `lore_<version>_linux_arm64.tar.gz` |
+| Windows (x86_64) | `lore_<version>_windows_amd64.zip` |
+| Windows (ARM64) | `lore_<version>_windows_arm64.zip` |
 
 ---
 
@@ -139,14 +139,14 @@ The binary includes SQLite (via [modernc.org/sqlite](https://pkg.go.dev/modernc.
 
 | Variable | Description | Default |
 |---|---|---|
-| `ENGRAM_DATA_DIR` | Data directory | `~/.engram` (Windows: `%USERPROFILE%\.engram`) |
-| `ENGRAM_PORT` | HTTP server port | `7437` |
+| `LORE_DATA_DIR` | Data directory | `~/.lore` (Windows: `%USERPROFILE%\.lore`) |
+| `LORE_PORT` | HTTP server port | `7437` |
 
 ---
 
 ## Windows Config Paths
 
-When using `engram setup`, config files are written to platform-appropriate locations:
+When using `lore setup`, config files are written to platform-appropriate locations:
 
 | Agent | macOS / Linux | Windows |
 |-------|---------------|---------|
@@ -156,4 +156,4 @@ When using `engram setup`, config files are written to platform-appropriate loca
 | Claude Code | Managed by `claude` CLI | Managed by `claude` CLI |
 | VS Code | `.vscode/mcp.json` (workspace) or `~/Library/Application Support/Code/User/mcp.json` (user) | `.vscode\mcp.json` (workspace) or `%APPDATA%\Code\User\mcp.json` (user) |
 | Antigravity | `~/.gemini/antigravity/mcp_config.json` | `%USERPROFILE%\.gemini\antigravity\mcp_config.json` |
-| Data directory | `~/.engram/` | `%USERPROFILE%\.engram\` |
+| Data directory | `~/.lore/` | `%USERPROFILE%\.lore\` |

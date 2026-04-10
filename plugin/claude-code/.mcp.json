@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "engram": {
-      "command": "engram",
+    "lore": {
+      "command": "lore",
       "args": ["mcp", "--tools=agent"]
     }
   }

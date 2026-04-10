@@ -1,7 +1,7 @@
 ---
-name: engram-pr-review-deep
+name: lore-pr-review-deep
 description: >
-  Deep technical review protocol for Engram pull requests.
+  Deep technical review protocol for Lore pull requests.
   Trigger: Reviewing any external or internal contribution before merge.
 license: Apache-2.0
 metadata:

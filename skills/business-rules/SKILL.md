@@ -1,7 +1,7 @@
 ---
-name: engram-business-rules
+name: lore-business-rules
 description: >
-  Product and business-rule guardrails for Engram. Trigger: Any change that
+  Product and business-rule guardrails for Lore. Trigger: Any change that
   affects sync behavior, project controls, permissions, or memory semantics.
 license: Apache-2.0
 metadata:

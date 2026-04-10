@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Gentleman-Programming/engram/internal/store"
+	"github.com/alferio94/lore/internal/store"
 )
 
 func TestViewObservationDetailWrapping(t *testing.T) {

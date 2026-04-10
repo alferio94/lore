@@ -1,7 +1,7 @@
 ---
-name: engram-memory-protocol
+name: lore-memory-protocol
 description: >
-  Persistent memory discipline for Engram contributors.
+  Persistent memory discipline for Lore contributors.
   Trigger: Decisions, bugfixes, discoveries, preferences, or session closure.
 license: Apache-2.0
 metadata:

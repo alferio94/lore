@@ -18,18 +18,18 @@
 
 ---
 
-> **engram** `/ˈen.ɡræm/` — *neuroscience*: the physical trace of a memory in the brain.
+> **lore** `/lɔːr/` — *noun*: the accumulated knowledge, traditions, and memory of a community or craft.
 
-Your AI coding agent forgets everything when the session ends. Engram gives it a brain.
+Your AI coding agent forgets everything when the session ends. Lore gives it a brain.
 
 A **Go binary** with SQLite + FTS5 full-text search, exposed via CLI, HTTP API, MCP server, and an interactive TUI. Works with **any agent** that supports MCP — Claude Code, OpenCode, Gemini CLI, Codex, VS Code (Copilot), Antigravity, Cursor, Windsurf, or anything else.
 
 ```
 Agent (Claude Code / OpenCode / Gemini CLI / Codex / VS Code / Antigravity / ...)
     ↓ MCP stdio
-Engram (single Go binary)
+Lore (single Go binary)
     ↓
-SQLite + FTS5 (~/.engram/engram.db)
+SQLite + FTS5 (~/.lore/lore.db)
 ```
 
 ## Quick Start
@@ -37,7 +37,7 @@ SQLite + FTS5 (~/.engram/engram.db)
 ### Install
 
 ```bash
-brew install gentleman-programming/tap/engram
+brew install alferio94/tap/lore
 ```
 
 Windows, Linux, and other install methods → [docs/INSTALLATION.md](docs/INSTALLATION.md)
@@ -46,11 +46,11 @@ Windows, Linux, and other install methods → [docs/INSTALLATION.md](docs/INSTAL
 
 | Agent | One-liner |
 |-------|-----------|
-| Claude Code | `claude plugin marketplace add Gentleman-Programming/engram && claude plugin install engram` |
-| OpenCode | `engram setup opencode` |
-| Gemini CLI | `engram setup gemini-cli` |
-| Codex | `engram setup codex` |
-| VS Code | `code --add-mcp '{"name":"engram","command":"engram","args":["mcp"]}'` |
+| Claude Code | `claude plugin marketplace add alferio94/lore && claude plugin install lore` |
+| OpenCode | `lore setup opencode` |
+| Gemini CLI | `lore setup gemini-cli` |
+| Codex | `lore setup codex` |
+| VS Code | `code --add-mcp '{"name":"lore","command":"lore","args":["mcp"]}'` |
 | Cursor / Windsurf / Any MCP | See [docs/AGENT-SETUP.md](docs/AGENT-SETUP.md) |
 
 Full per-agent config, Memory Protocol, and compaction survival → [docs/AGENT-SETUP.md](docs/AGENT-SETUP.md)
@@ -62,7 +62,7 @@ That's it. No Node.js, no Python, no Docker. **One binary, one SQLite file.**
 ```
 1. Agent completes significant work (bugfix, architecture decision, etc.)
 2. Agent calls mem_save → title, type, What/Why/Where/Learned
-3. Engram persists to SQLite with FTS5 indexing
+3. Lore persists to SQLite with FTS5 indexing
 4. Next session: agent searches memory, gets relevant context
 ```
 
@@ -93,7 +93,7 @@ Full tool reference → [docs/ARCHITECTURE.md#mcp-tools](docs/ARCHITECTURE.md#mc
 ## Terminal UI
 
 ```bash
-engram tui
+lore tui
 ```
 
 <p align="center">
@@ -110,10 +110,10 @@ engram tui
 Share memories across machines. Uses compressed chunks — no merge conflicts, no huge files.
 
 ```bash
-engram sync                    # Export new memories as compressed chunk
-git add .engram/ && git commit -m "sync engram memories"
-engram sync --import           # On another machine: import new chunks
-engram sync --status           # Check sync status
+lore sync                    # Export new memories as compressed chunk
+git add .lore/ && git commit -m "sync lore memories"
+lore sync --import           # On another machine: import new chunks
+lore sync --status           # Check sync status
 ```
 
 Full sync documentation → [DOCS.md](DOCS.md)
@@ -122,22 +122,22 @@ Full sync documentation → [DOCS.md](DOCS.md)
 
 | Command | Description |
 |---------|-------------|
-| `engram setup [agent]` | Install agent integration |
-| `engram serve [port]` | Start HTTP API (default: 7437) |
-| `engram mcp` | Start MCP server (stdio). Accepts `--project` or `ENGRAM_PROJECT` |
-| `engram tui` | Launch terminal UI |
-| `engram search <query>` | Search memories |
-| `engram save <title> <msg>` | Save a memory |
-| `engram timeline <obs_id>` | Chronological context |
-| `engram context [project]` | Recent session context |
-| `engram stats` | Memory statistics |
-| `engram export [file]` | Export to JSON |
-| `engram import <file>` | Import from JSON |
-| `engram sync` | Git sync export |
-| `engram projects list` | Show all projects with observation/session/prompt counts |
-| `engram projects consolidate` | Interactive merge of similar project names (`--all`, `--dry-run`) |
-| `engram projects prune` | Remove projects with 0 observations (`--dry-run`) |
-| `engram version` | Show version |
+| `lore setup [agent]` | Install agent integration |
+| `lore serve [port]` | Start HTTP API (default: 7437) |
+| `lore mcp` | Start MCP server (stdio). Accepts `--project` or `LORE_PROJECT` |
+| `lore tui` | Launch terminal UI |
+| `lore search <query>` | Search memories |
+| `lore save <title> <msg>` | Save a memory |
+| `lore timeline <obs_id>` | Chronological context |
+| `lore context [project]` | Recent session context |
+| `lore stats` | Memory statistics |
+| `lore export [file]` | Export to JSON |
+| `lore import <file>` | Import from JSON |
+| `lore sync` | Git sync export |
+| `lore projects list` | Show all projects with observation/session/prompt counts |
+| `lore projects consolidate` | Interactive merge of similar project names (`--all`, `--dry-run`) |
+| `lore projects prune` | Remove projects with 0 observations (`--dry-run`) |
+| `lore version` | Show version |
 
 ## Documentation
 
@@ -147,7 +147,7 @@ Full sync documentation → [DOCS.md](DOCS.md)
 | [Agent Setup](docs/AGENT-SETUP.md) | Per-agent configuration + Memory Protocol |
 | [Architecture](docs/ARCHITECTURE.md) | How it works + MCP tools + project structure |
 | [Plugins](docs/PLUGINS.md) | OpenCode & Claude Code plugin details |
-| [Comparison](docs/COMPARISON.md) | Why Engram vs claude-mem |
+| [Comparison](docs/COMPARISON.md) | Why Lore vs alternatives |
 | [Contributing](CONTRIBUTING.md) | Contribution workflow + standards |
 | [Full Docs](DOCS.md) | Complete technical reference |
 

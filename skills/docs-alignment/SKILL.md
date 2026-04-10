@@ -1,7 +1,7 @@
 ---
-name: engram-docs-alignment
+name: lore-docs-alignment
 description: >
-  Documentation alignment rules for Engram.
+  Documentation alignment rules for Lore.
   Trigger: Any code or workflow change that affects user or contributor behavior.
 license: Apache-2.0
 metadata:

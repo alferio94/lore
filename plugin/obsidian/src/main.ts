@@ -1,7 +1,7 @@
 import { Notice, Plugin } from "obsidian";
 import {
-	EngramSettings,
-	EngramSettingTab,
+	LoreSettings,
+	LoreSettingTab,
 	DEFAULT_SETTINGS,
 	formatRelative,
 } from "./settings";
@@ -9,8 +9,8 @@ import { syncNow, SyncResult } from "./sync";
 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
-export default class EngramBrainPlugin extends Plugin {
-	settings: EngramSettings;
+export default class LoreBrainPlugin extends Plugin {
+	settings: LoreSettings;
 
 	/** Node-style interval handle returned by window.setInterval. Null when auto-sync is off. */
 	private _syncInterval: ReturnType<typeof window.setInterval> | null = null;
@@ -30,22 +30,22 @@ export default class EngramBrainPlugin extends Plugin {
 		this.lastSuccessCount = this.settings.lastSyncCount;
 
 		// Settings tab (REQ-PLUGIN-02)
-		this.addSettingTab(new EngramSettingTab(this.app, this));
+		this.addSettingTab(new LoreSettingTab(this.app, this));
 
 		// Ribbon button (REQ-PLUGIN-03)
 		const ribbonEl = this.addRibbonIcon(
 			"brain",
-			"Sync Engram Brain",
+			"Sync Lore Brain",
 			async () => {
 				await this.syncNow();
 			}
 		);
-		ribbonEl.addClass("engram-brain-ribbon");
+		ribbonEl.addClass("lore-brain-ribbon");
 
 		// Command palette entry (bonus usability)
 		this.addCommand({
-			id: "sync-engram",
-			name: "Sync Engram Brain",
+			id: "sync-lore",
+			name: "Sync Lore Brain",
 			callback: () => {
 				this.syncNow();
 			},
@@ -53,7 +53,7 @@ export default class EngramBrainPlugin extends Plugin {
 
 		// Status bar (REQ-PLUGIN-05)
 		this.statusBarItem = this.addStatusBarItem();
-		this.statusBarItem.setText("Engram: ready");
+		this.statusBarItem.setText("Lore: ready");
 
 		// Optional auto-sync polling (REQ-PLUGIN-01)
 		if (this.settings.autoSyncMinutes > 0) {
@@ -125,7 +125,7 @@ export default class EngramBrainPlugin extends Plugin {
 	 * - Persists lastSyncAt + lastSyncCount on success
 	 */
 	async syncNow(): Promise<void> {
-		this.setStatusBar("Engram: syncing…");
+		this.setStatusBar("Lore: syncing…");
 
 		let result: SyncResult;
 		try {
@@ -153,7 +153,7 @@ export default class EngramBrainPlugin extends Plugin {
 		if (skipped > 0) parts.push(`${skipped} unchanged`);
 
 		const summary = parts.length > 0 ? parts.join(", ") : "nothing changed";
-		new Notice(`Engram: ${summary}`);
+		new Notice(`Lore: ${summary}`);
 
 		// Persist sync metadata
 		const now = new Date().toISOString();
@@ -178,7 +178,7 @@ export default class EngramBrainPlugin extends Plugin {
 	}
 
 	/**
-	 * REQ-PLUGIN-05 — Success: "Engram: N notes · synced just now"
+	 * REQ-PLUGIN-05 — Success: "Lore: N notes · synced just now"
 	 *
 	 * Uses `lastSyncCount` from settings so that re-opens after restart
 	 * show the previously synced count until a new sync completes.
@@ -187,17 +187,17 @@ export default class EngramBrainPlugin extends Plugin {
 		const timeStr = this.settings.lastSyncAt
 			? formatRelative(new Date(this.settings.lastSyncAt))
 			: "just now";
-		this.setStatusBar(`Engram: ${count} notes · synced ${timeStr}`);
+		this.setStatusBar(`Lore: ${count} notes · synced ${timeStr}`);
 	}
 
 	/**
-	 * REQ-PLUGIN-05 — Failure: "Engram: sync failed · {relative time}"
+	 * REQ-PLUGIN-05 — Failure: "Lore: sync failed · {relative time}"
 	 *
 	 * Does NOT overwrite `lastSuccessCount` — preserved from the last
 	 * successful sync so the count shown in settings is still accurate.
 	 */
 	private setStatusBarFailure() {
 		const timeStr = formatRelative(new Date());
-		this.setStatusBar(`Engram: sync failed · ${timeStr}`);
+		this.setStatusBar(`Lore: sync failed · ${timeStr}`);
 	}
 }

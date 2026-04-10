@@ -1,13 +1,13 @@
 #!/bin/bash
-# Engram — SessionStart hook for Claude Code
+# Lore — SessionStart hook for Claude Code
 #
-# 1. Ensures the engram server is running
-# 2. Creates a session in engram
-# 3. Auto-imports git-synced chunks if .engram/manifest.json exists
+# 1. Ensures the lore server is running
+# 2. Creates a session in lore
+# 3. Auto-imports git-synced chunks if .lore/manifest.json exists
 # 4. Injects Memory Protocol instructions + memory context
 
-ENGRAM_PORT="${ENGRAM_PORT:-7437}"
-ENGRAM_URL="http://127.0.0.1:${ENGRAM_PORT}"
+LORE_PORT="${LORE_PORT:-7437}"
+LORE_URL="http://127.0.0.1:${LORE_PORT}"
 
 # Load shared helpers
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -20,15 +20,15 @@ CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 OLD_PROJECT=$(basename "$CWD")
 PROJECT=$(detect_project "$CWD")
 
-# Ensure engram server is running
-if ! curl -sf "${ENGRAM_URL}/health" --max-time 1 > /dev/null 2>&1; then
-  engram serve &>/dev/null &
+# Ensure lore server is running
+if ! curl -sf "${LORE_URL}/health" --max-time 1 > /dev/null 2>&1; then
+  lore serve &>/dev/null &
   sleep 0.5
 fi
 
 # Migrate project name if it changed (one-time, idempotent)
 if [ "$OLD_PROJECT" != "$PROJECT" ] && [ -n "$OLD_PROJECT" ] && [ -n "$PROJECT" ]; then
-  curl -sf "${ENGRAM_URL}/projects/migrate" \
+  curl -sf "${LORE_URL}/projects/migrate" \
     -X POST \
     -H "Content-Type: application/json" \
     -d "$(jq -n --arg old "$OLD_PROJECT" --arg new "$PROJECT" \
@@ -38,7 +38,7 @@ fi
 
 # Create session
 if [ -n "$SESSION_ID" ] && [ -n "$PROJECT" ]; then
-  curl -sf "${ENGRAM_URL}/sessions" \
+  curl -sf "${LORE_URL}/sessions" \
     -X POST \
     -H "Content-Type: application/json" \
     -d "$(jq -n --arg id "$SESSION_ID" --arg project "$PROJECT" --arg dir "$CWD" \
@@ -47,19 +47,19 @@ if [ -n "$SESSION_ID" ] && [ -n "$PROJECT" ]; then
 fi
 
 # Auto-import git-synced chunks
-if [ -f "${CWD}/.engram/manifest.json" ]; then
-  engram sync --import 2>/dev/null
+if [ -f "${CWD}/.lore/manifest.json" ]; then
+  lore sync --import 2>/dev/null
 fi
 
 # Fetch memory context
 ENCODED_PROJECT=$(printf '%s' "$PROJECT" | jq -sRr @uri)
-CONTEXT=$(curl -sf "${ENGRAM_URL}/context?project=${ENCODED_PROJECT}" --max-time 3 2>/dev/null | jq -r '.context // empty')
+CONTEXT=$(curl -sf "${LORE_URL}/context?project=${ENCODED_PROJECT}" --max-time 3 2>/dev/null | jq -r '.context // empty')
 
 # Inject Memory Protocol + context — stdout goes to Claude as additionalContext
 cat <<'PROTOCOL'
-## Engram Persistent Memory — ACTIVE PROTOCOL
+## Lore Persistent Memory — ACTIVE PROTOCOL
 
-You have engram memory tools. This protocol is MANDATORY and ALWAYS ACTIVE.
+You have lore memory tools. This protocol is MANDATORY and ALWAYS ACTIVE.
 
 ### CORE TOOLS — always available, no ToolSearch needed
 mem_save, mem_search, mem_context, mem_session_summary, mem_get_observation, mem_save_prompt

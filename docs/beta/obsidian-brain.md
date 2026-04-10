@@ -1,19 +1,19 @@
 # 🧠 Obsidian Brain — Beta
 
-> **Status**: Beta — feedback welcome on the [GitHub issues](https://github.com/Gentleman-Programming/engram/issues) tagged `beta:obsidian`.
+> **Status**: Beta — feedback welcome on the [GitHub issues](https://github.com/alferio94/lore/issues) tagged `beta:obsidian`.
 > **Available since**: `v1.12.0-beta.1`
 > **Stability**: Behavior is locked but flag names may evolve before stable release.
-> **Side-by-side**: This beta installs as `engram-beta` so it doesn't replace your stable `engram`. Both binaries share the same `~/.engram/engram.db`, so memories captured by your stable agent show up in the beta exports automatically.
+> **Side-by-side**: This beta installs as `lore-beta` so it doesn't replace your stable `lore`. Both binaries share the same `~/.lore/lore.db`, so memories captured by your stable agent show up in the beta exports automatically.
 
 Visualize your AI agent's memory as an interactive knowledge graph in [Obsidian](https://obsidian.md/). Every observation becomes a Markdown note. Sessions, projects, and topic clusters become connected hubs. Open Obsidian's Graph View and **see how your agent's brain actually thinks**.
 
-![Brain Graph Preview](https://raw.githubusercontent.com/Gentleman-Programming/engram/main/assets/obsidian-brain-graph.png)
+![Brain Graph Preview](https://raw.githubusercontent.com/alferio94/lore/main/assets/obsidian-brain-graph.png)
 
 ---
 
 ## Why This Exists
 
-Engram already stores every decision, bugfix, and architectural insight your agent makes. But that data lives in a SQLite file. You can search it via the CLI, query it via MCP, browse it in the TUI — but you can't **see the connections**.
+Lore already stores every decision, bugfix, and architectural insight your agent makes. But that data lives in a SQLite file. You can search it via the CLI, query it via MCP, browse it in the TUI — but you can't **see the connections**.
 
 Obsidian's graph view is the perfect canvas:
 - Each memory = a node
@@ -25,66 +25,66 @@ The result: your agent's knowledge becomes a **navigable cognitive map** instead
 
 ---
 
-## Install Side-by-Side (`engram-beta`)
+## Install Side-by-Side (`lore-beta`)
 
-The beta ships as a separate binary named `engram-beta` so it never touches your stable `engram` install. Both binaries read and write the same `~/.engram/engram.db`, so anything captured by your stable agent is immediately visible to the beta.
+The beta ships as a separate binary named `lore-beta` so it never touches your stable `lore` install. Both binaries read and write the same `~/.lore/lore.db`, so anything captured by your stable agent is immediately visible to the beta.
 
-Pick the right archive for your platform from the [release page](https://github.com/Gentleman-Programming/engram/releases/tag/v1.12.0-beta.1), then extract and rename:
+Pick the right archive for your platform from the [release page](https://github.com/alferio94/lore/releases/tag/v1.12.0-beta.1), then extract and rename:
 
 ### macOS (Apple Silicon)
 
 ```bash
-curl -L https://github.com/Gentleman-Programming/engram/releases/download/v1.12.0-beta.1/engram_1.12.0-beta.1_darwin_arm64.tar.gz -o /tmp/engram-beta.tar.gz
-tar -xzf /tmp/engram-beta.tar.gz -C /tmp
-sudo mv /tmp/engram /usr/local/bin/engram-beta
-sudo chmod +x /usr/local/bin/engram-beta
-engram-beta version
+curl -L https://github.com/alferio94/lore/releases/download/v1.12.0-beta.1/lore_1.12.0-beta.1_darwin_arm64.tar.gz -o /tmp/lore-beta.tar.gz
+tar -xzf /tmp/lore-beta.tar.gz -C /tmp
+sudo mv /tmp/lore /usr/local/bin/lore-beta
+sudo chmod +x /usr/local/bin/lore-beta
+lore-beta version
 ```
 
 ### macOS (Intel)
 
 ```bash
-curl -L https://github.com/Gentleman-Programming/engram/releases/download/v1.12.0-beta.1/engram_1.12.0-beta.1_darwin_amd64.tar.gz -o /tmp/engram-beta.tar.gz
-tar -xzf /tmp/engram-beta.tar.gz -C /tmp
-sudo mv /tmp/engram /usr/local/bin/engram-beta
-sudo chmod +x /usr/local/bin/engram-beta
-engram-beta version
+curl -L https://github.com/alferio94/lore/releases/download/v1.12.0-beta.1/lore_1.12.0-beta.1_darwin_amd64.tar.gz -o /tmp/lore-beta.tar.gz
+tar -xzf /tmp/lore-beta.tar.gz -C /tmp
+sudo mv /tmp/lore /usr/local/bin/lore-beta
+sudo chmod +x /usr/local/bin/lore-beta
+lore-beta version
 ```
 
 ### Linux
 
 ```bash
-curl -L https://github.com/Gentleman-Programming/engram/releases/download/v1.12.0-beta.1/engram_1.12.0-beta.1_linux_amd64.tar.gz -o /tmp/engram-beta.tar.gz
-tar -xzf /tmp/engram-beta.tar.gz -C /tmp
-sudo mv /tmp/engram /usr/local/bin/engram-beta
-sudo chmod +x /usr/local/bin/engram-beta
-engram-beta version
+curl -L https://github.com/alferio94/lore/releases/download/v1.12.0-beta.1/lore_1.12.0-beta.1_linux_amd64.tar.gz -o /tmp/lore-beta.tar.gz
+tar -xzf /tmp/lore-beta.tar.gz -C /tmp
+sudo mv /tmp/lore /usr/local/bin/lore-beta
+sudo chmod +x /usr/local/bin/lore-beta
+lore-beta version
 ```
 
 ### From source (`go install`)
 
 ```bash
-go install github.com/Gentleman-Programming/engram/cmd/engram@v1.12.0-beta.1
-mv ~/go/bin/engram ~/go/bin/engram-beta
-engram-beta version
+go install github.com/alferio94/lore/cmd/lore@v1.12.0-beta.1
+mv ~/go/bin/lore ~/go/bin/lore-beta
+lore-beta version
 ```
 
 ### Verify both binaries coexist
 
 ```bash
-which engram        # /usr/local/bin/engram (stable, untouched)
-which engram-beta   # /usr/local/bin/engram-beta (the beta)
-engram version      # your stable version
-engram-beta version # v1.12.0-beta.1
+which lore        # /usr/local/bin/lore (stable, untouched)
+which lore-beta   # /usr/local/bin/lore-beta (the beta)
+lore version      # your stable version
+lore-beta version # v1.12.0-beta.1
 ```
 
 ### Uninstall
 
 ```bash
-sudo rm /usr/local/bin/engram-beta
+sudo rm /usr/local/bin/lore-beta
 ```
 
-The stable `engram`, your `~/.engram/engram.db`, and your Obsidian vault are untouched.
+The stable `lore`, your `~/.lore/lore.db`, and your Obsidian vault are untouched.
 
 ---
 
@@ -92,12 +92,12 @@ The stable `engram`, your `~/.engram/engram.db`, and your Obsidian vault are unt
 
 ```bash
 # 1. Create a vault folder anywhere
-mkdir -p ~/Obsidian/engram
+mkdir -p ~/Obsidian/lore
 
-# 2. Export your full memory + bootstrap the engram-brain graph layout
-engram-beta obsidian-export --vault ~/Obsidian/engram --graph-config force
+# 2. Export your full memory + bootstrap the lore-brain graph layout
+lore-beta obsidian-export --vault ~/Obsidian/lore --graph-config force
 
-# 3. Open Obsidian, "Open folder as vault" → ~/Obsidian/engram
+# 3. Open Obsidian, "Open folder as vault" → ~/Obsidian/lore
 # 4. Cmd+G (Mac) or Ctrl+G → Graph View
 ```
 
@@ -108,7 +108,7 @@ You should now see hundreds (or thousands) of connected nodes, color-coded by ty
 ## How It Works
 
 ```
-SQLite (~/.engram/engram.db)
+SQLite (~/.lore/lore.db)
         │
         ▼
  obsidian-export reads via store.Export()
@@ -117,15 +117,15 @@ SQLite (~/.engram/engram.db)
  Transform → Markdown files + YAML frontmatter + wikilinks
         │
         ▼
- {vault}/engram/{project}/{type}/{slug}-{id}.md
+ {vault}/lore/{project}/{type}/{slug}-{id}.md
         │
         ▼
  Obsidian renders the graph from wikilinks
 ```
 
-Key principle: **the exporter is one-way**. Engram writes to the vault, never reads from it. Your manual edits in Obsidian don't propagate back. If you re-run the export, your edited notes are overwritten with the latest from Engram. This is by design — the vault is a **live mirror**, not a fork.
+Key principle: **the exporter is one-way**. Lore writes to the vault, never reads from it. Your manual edits in Obsidian don't propagate back. If you re-run the export, your edited notes are overwritten with the latest from Lore. This is by design — the vault is a **live mirror**, not a fork.
 
-The exporter only writes inside `{vault}/engram/`. It will never touch other folders in your vault, so you can safely point it at an existing vault that has your own notes.
+The exporter only writes inside `{vault}/lore/`. It will never touch other folders in your vault, so you can safely point it at an existing vault that has your own notes.
 
 ---
 
@@ -358,9 +358,9 @@ You can absolutely tweak the graph view in Obsidian's UI — Engram's `preserve`
 
 ## TypeScript Plugin (Optional)
 
-For an in-Obsidian experience with a ribbon button, settings tab, and status bar indicator, there's a TypeScript community plugin in [`plugin/obsidian/`](https://github.com/Gentleman-Programming/engram/tree/main/plugin/obsidian).
+For an in-Obsidian experience with a ribbon button, settings tab, and status bar indicator, there's a TypeScript community plugin in [`plugin/obsidian/`](https://github.com/alferio94/lore/tree/main/plugin/obsidian).
 
-It uses Engram's HTTP API (`engram serve`) instead of reading SQLite directly:
+It uses Lore's HTTP API (`lore serve`) instead of reading SQLite directly:
 
 ```bash
 cd plugin/obsidian
@@ -445,7 +445,7 @@ This is a beta feature. **We want to hear how it works for you, especially**:
 - Did the daemon mode crash, leak memory, or behave unexpectedly?
 - Did the graph config bootstrap clobber something you cared about?
 
-File issues at [github.com/Gentleman-Programming/engram/issues](https://github.com/Gentleman-Programming/engram/issues) with the `beta:obsidian` label.
+File issues at [github.com/alferio94/lore/issues](https://github.com/alferio94/lore/issues) with the `beta:obsidian` label.
 
 ---
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Gentleman-Programming/engram/internal/store"
+	"github.com/alferio94/lore/internal/store"
 )
 
 // ExportConfig holds all CLI flags for the obsidian-export command.

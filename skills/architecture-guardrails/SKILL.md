@@ -1,7 +1,7 @@
 ---
-name: engram-architecture-guardrails
+name: lore-architecture-guardrails
 description: >
-  Architecture guardrails for Engram across local store, cloud sync, dashboard,
+  Architecture guardrails for Lore across local store, cloud sync, dashboard,
   and plugins. Trigger: Any change that affects system boundaries, ownership,
   state flow, or cross-package responsibilities.
 license: Apache-2.0

@@ -13,21 +13,21 @@
 For [OpenCode](https://opencode.ai) users, a thin TypeScript plugin adds enhanced session management on top of the MCP tools:
 
 ```bash
-# Install via engram (recommended — works from Homebrew or binary install)
-engram setup opencode
+# Install via lore (recommended — works from Homebrew or binary install)
+lore setup opencode
 
-# Or manually: cp plugin/opencode/engram.ts ~/.config/opencode/plugins/
+# Or manually: cp plugin/opencode/lore.ts ~/.config/opencode/plugins/
 ```
 
-The plugin auto-starts the HTTP server if it's not already running — no manual `engram serve` needed.
+The plugin auto-starts the HTTP server if it's not already running — no manual `lore serve` needed.
 
 > **Local model compatibility:** The plugin works with all models, including local ones served via llama.cpp, Ollama, or similar. The Memory Protocol is concatenated into the existing system prompt (not added as a separate system message), so models with strict Jinja templates (Qwen, Mistral/Ministral) work correctly.
 
 ### What the Plugin Does
 
 The plugin:
-- **Auto-starts** the engram server if not running
-- **Auto-imports** git-synced memories from `.engram/manifest.json` if present in the project
+- **Auto-starts** the lore server if not running
+- **Auto-imports** git-synced memories from `.lore/manifest.json` if present in the project
 - **Creates sessions** on-demand via `ensureSession()` (resilient to restarts/reconnects)
 - **Injects the Memory Protocol** into the agent's system prompt via `chat.system.transform` — strict rules for when to save, when to search, and a mandatory session close protocol. The protocol is concatenated into the existing system message (not pushed as a separate one), ensuring compatibility with models that only accept a single system block (Qwen, Mistral/Ministral via llama.cpp, etc.)
 - **Injects previous session context** into the compaction prompt
@@ -63,11 +63,11 @@ For [Claude Code](https://docs.anthropic.com/en/docs/claude-code) users, a plugi
 
 ```bash
 # Install via Claude Code marketplace (recommended)
-claude plugin marketplace add Gentleman-Programming/engram
-claude plugin install engram
+claude plugin marketplace add alferio94/lore
+claude plugin install lore
 
-# Or via engram binary (works from Homebrew or binary install)
-engram setup claude-code
+# Or via lore binary (works from Homebrew or binary install)
+lore setup claude-code
 
 # Or for local development/testing from the repo
 claude --plugin-dir ./plugin/claude-code
@@ -89,7 +89,7 @@ claude --plugin-dir ./plugin/claude-code
 ```
 plugin/claude-code/
 ├── .claude-plugin/plugin.json     # Plugin manifest
-├── .mcp.json                      # Registers engram MCP server
+├── .mcp.json                      # Registers lore MCP server
 ├── hooks/hooks.json               # SessionStart + SubagentStop + Stop lifecycle hooks
 ├── scripts/
 │   ├── session-start.sh           # Ensures server, creates session, imports chunks, injects context
@@ -102,9 +102,9 @@ plugin/claude-code/
 ### How It Works
 
 **On session start** (`startup`):
-1. Ensures the engram HTTP server is running
+1. Ensures the lore HTTP server is running
 2. Creates a new session via the API
-3. Auto-imports git-synced chunks from `.engram/manifest.json` (if present)
+3. Auto-imports git-synced chunks from `.lore/manifest.json` (if present)
 4. Injects previous session context into Claude's initial context
 
 **On compaction** (`compact`):

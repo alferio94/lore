@@ -1,7 +1,7 @@
 ---
-name: engram-sdd-flow
+name: lore-sdd-flow
 description: >
-  Spec-Driven Development workflow for Engram.
+  Spec-Driven Development workflow for Lore.
   Trigger: When user requests SDD or multi-phase implementation planning.
 license: Apache-2.0
 metadata:

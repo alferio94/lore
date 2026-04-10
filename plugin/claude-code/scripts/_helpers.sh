@@ -1,5 +1,5 @@
 #!/bin/bash
-# Engram — Shared helpers for Claude Code hooks
+# Lore — Shared helpers for Claude Code hooks
 # WARNING: Do not read from stdin here — scripts source this before reading their hook input.
 
 # Detect project name from git remote, with fallbacks.

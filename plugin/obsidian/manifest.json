@@ -1,10 +1,10 @@
 {
-  "id": "engram-brain",
-  "name": "Engram Brain",
+  "id": "lore-brain",
+  "name": "Lore Brain",
   "version": "1.0.0",
   "minAppVersion": "1.4.0",
-  "description": "Sync your Engram persistent memory into your Obsidian vault as interconnected markdown notes.",
-  "author": "Gentleman Programming",
-  "authorUrl": "https://github.com/Gentleman-Programming/engram",
+  "description": "Sync your Lore persistent memory into your Obsidian vault as interconnected markdown notes.",
+  "author": "alferio94",
+  "authorUrl": "https://github.com/alferio94/lore",
   "isDesktopOnly": false
 }

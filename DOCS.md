@@ -1,16 +1,16 @@
-# Engram
+# Lore
 
 **Persistent memory for AI coding agents**
 
-> *Engram* is a neuroscience term for the physical trace of a memory in the brain.
+> *Lore* is the accumulated knowledge and memory of a craft or community.
 
-## What is Engram?
+## What is Lore?
 
 An agent-agnostic persistent memory system. A Go binary with SQLite + FTS5 full-text search, exposed via CLI, HTTP API, and MCP server. Thin adapter plugins connect it to specific agents (OpenCode, Claude Code, Cursor, Windsurf, etc.).
 
 **Why Go?** Single binary, cross-platform, no runtime dependencies. Uses `modernc.org/sqlite` (pure Go, no CGO).
 
-- **Module**: `github.com/alanbuscaglia/engram`
+- **Module**: `github.com/alferio94/lore`
 - **Version**: 0.1.0
 
 ---
@@ -22,25 +22,25 @@ The Go binary is the brain. Thin adapter plugins per-agent talk to it via HTTP o
 ```
 Agent (OpenCode/Claude Code/Cursor/etc.)
     ↓ (plugin or MCP)
-Engram Go Binary
+Lore Go Binary
     ↓
-SQLite + FTS5 (~/.engram/engram.db)
+SQLite + FTS5 (~/.lore/lore.db)
 ```
 
 Six interfaces:
 
-1. **CLI** — Direct terminal usage (`engram search`, `engram save`, etc.)
+1. **CLI** — Direct terminal usage (`lore search`, `lore save`, etc.)
 2. **HTTP API** — REST API on port 7437 for plugins and integrations
 3. **MCP Server** — stdio transport for any MCP-compatible agent
-4. **TUI** — Interactive terminal UI for browsing memories (`engram tui`)
+4. **TUI** — Interactive terminal UI for browsing memories (`lore tui`)
 
 ---
 
 ## Project Structure
 
 ```
-engram/
-├── cmd/engram/main.go              # CLI entrypoint — all commands
+lore/
+├── cmd/lore/main.go              # CLI entrypoint — all commands
 ├── internal/
 │   ├── store/store.go              # Core: SQLite + FTS5 + all data operations
 │   ├── server/server.go            # HTTP REST API server (port 7437)
@@ -87,31 +87,31 @@ engram/
 ## CLI Commands
 
 ```
-engram serve [port]       Start HTTP API server (default: 7437)
-engram mcp                Start MCP server (stdio transport)
-engram tui                Launch interactive terminal UI
-engram search <query>     Search memories [--type TYPE] [--project PROJECT] [--scope SCOPE] [--limit N]
-engram save <title> <msg> Save a memory [--type TYPE] [--project PROJECT] [--scope SCOPE] [--topic TOPIC_KEY]
-engram timeline <obs_id>  Show chronological context around an observation [--before N] [--after N]
-engram context [project]  Show recent context from previous sessions
-engram stats              Show memory system statistics
-engram export [file]      Export all memories to JSON (default: engram-export.json)
-engram import <file>      Import memories from a JSON export file
-engram sync               Export new memories as chunk [--import] [--status] [--project NAME] [--all]
-engram projects list      Show all projects with obs/session/prompt counts
-engram projects consolidate  Interactive merge of similar project names [--all] [--dry-run]
-engram projects prune     Remove projects with 0 observations [--dry-run]
-engram version            Print version
-engram help               Show help
+lore serve [port]       Start HTTP API server (default: 7437)
+lore mcp                Start MCP server (stdio transport)
+lore tui                Launch interactive terminal UI
+lore search <query>     Search memories [--type TYPE] [--project PROJECT] [--scope SCOPE] [--limit N]
+lore save <title> <msg> Save a memory [--type TYPE] [--project PROJECT] [--scope SCOPE] [--topic TOPIC_KEY]
+lore timeline <obs_id>  Show chronological context around an observation [--before N] [--after N]
+lore context [project]  Show recent context from previous sessions
+lore stats              Show memory system statistics
+lore export [file]      Export all memories to JSON (default: lore-export.json)
+lore import <file>      Import memories from a JSON export file
+lore sync               Export new memories as chunk [--import] [--status] [--project NAME] [--all]
+lore projects list      Show all projects with obs/session/prompt counts
+lore projects consolidate  Interactive merge of similar project names [--all] [--dry-run]
+lore projects prune     Remove projects with 0 observations [--dry-run]
+lore version            Print version
+lore help               Show help
 ```
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |---|---|---|
-| `ENGRAM_DATA_DIR` | Override data directory | `~/.engram` |
-| `ENGRAM_PORT` | Override HTTP server port | `7437` |
-| `ENGRAM_PROJECT` | Override project name for MCP server | auto-detected via git |
+| `LORE_DATA_DIR` | Override data directory | `~/.lore` |
+| `LORE_PORT` | Override HTTP server port | `7437` |
+| `LORE_PROJECT` | Override project name for MCP server | auto-detected via git |
 
 ---
 
@@ -119,30 +119,30 @@ engram help               Show help
 
 ### Using systemd
 
-First you need add your engram binary to use in a global way. By example: `/usr/bin`, `/usr/local/bin` or `~/.local/bin`.
+First you need add your lore binary to use in a global way. By example: `/usr/bin`, `/usr/local/bin` or `~/.local/bin`.
 In this documentation we will use `~/.local/bin`.
 
 1. First, move binary to `~/.local/bin` (Check if this is in your $PATH variable).
-2. Create a directory for you service with user scope and engram data: `mkdir -p ~/.engram ~/.config/systemd/user`.
-3. Create your service file in the following path: `~/.config/systemd/user/engram.service`.
+2. Create a directory for you service with user scope and lore data: `mkdir -p ~/.lore ~/.config/systemd/user`.
+3. Create your service file in the following path: `~/.config/systemd/user/lore.service`.
 4. Reload service list: `systemctl --user daemon-reload`.
-5. Enable your service: `systemctl --user enable engram`.
-6. Then start it: `systemctl --user start engram`.
-7. And finally check the logs: `journalctl --user -u engram -f`.
+5. Enable your service: `systemctl --user enable lore`.
+6. Then start it: `systemctl --user start lore`.
+7. And finally check the logs: `journalctl --user -u lore -f`.
 
-The following code is an example of the `~/.config/systemd/user/engram.service` file:
+The following code is an example of the `~/.config/systemd/user/lore.service` file:
 
 ```shell
 [Unit]
-Description=Engram Memory Server
+Description=Lore Memory Server
 After=network.target
 
 [Service]
 WorkingDirectory=%h
-ExecStart=%h/.local/bin/engram serve
+ExecStart=%h/.local/bin/lore serve
 Restart=always
 RestartSec=3
-Environment=ENGRAM_DATA_DIR=%h/.engram
+Environment=LORE_DATA_DIR=%h/.lore
 
 [Install]
 WantedBy=default.target
@@ -152,7 +152,7 @@ WantedBy=default.target
 
 ## Terminal UI (TUI)
 
-Interactive Bubbletea-based terminal UI. Launch with `engram tui`.
+Interactive Bubbletea-based terminal UI. Launch with `lore tui`.
 
 Built with [Bubbletea](https://github.com/charmbracelet/bubbletea) v1, [Lipgloss](https://github.com/charmbracelet/lipgloss), and [Bubbles](https://github.com/charmbracelet/bubbles) components. Follows the Gentleman Bubbletea skill patterns.
 
@@ -208,7 +208,7 @@ All endpoints return JSON. Server listens on `127.0.0.1:7437`.
 
 ### Health
 
-- `GET /health` — Returns `{"status": "ok", "service": "engram", "version": "0.1.0"}`
+- `GET /health` — Returns `{"status": "ok", "service": "lore", "version": "0.1.0"}`
 
 ### Sessions
 
@@ -339,7 +339,7 @@ Extract structured learnings from text output. Looks for `## Key Learnings:` sec
 
 ## Project Name Normalization
 
-Engram automatically prevents project name drift — the same project saved under different names (`"engram"` vs `"Engram"` vs `"engram-memory"`) by different clients or users.
+Lore automatically prevents project name drift — the same project saved under different names (`"lore"` vs `"Lore"` vs `"lore-memory"`) by different clients or users.
 
 ### Automatic normalization
 
@@ -349,18 +349,18 @@ All project names are normalized on write and read: **lowercase**, **trimmed**, 
 
 The MCP server auto-detects the project name at startup using a priority chain:
 1. `--project` flag
-2. `ENGRAM_PROJECT` environment variable
+2. `LORE_PROJECT` environment variable
 3. Git remote origin URL (extracts repo name)
 4. Git repository root directory name
 5. Current working directory basename
 
 ### Similar-project warnings
 
-When saving to a project that doesn't exist yet, Engram checks for similar existing project names (Levenshtein distance, substring, case-insensitive matching) and warns the agent if a likely variant already exists.
+When saving to a project that does not exist yet, Lore checks for similar existing project names (Levenshtein distance, substring, case-insensitive matching) and warns the agent if a likely variant already exists.
 
 ### Retroactive cleanup
 
-Use `engram projects consolidate` to interactively merge variant project names, or `mem_merge_projects` for agent-driven consolidation.
+Use `lore projects consolidate` to interactively merge variant project names, or `mem_merge_projects` for agent-driven consolidation.
 
 ---
 
@@ -371,9 +371,9 @@ Add to any agent's config:
 ```json
 {
   "mcp": {
-    "engram": {
+    "lore": {
       "type": "stdio",
-      "command": "engram",
+      "command": "lore",
       "args": ["mcp"]
     }
   }
@@ -384,7 +384,7 @@ Add to any agent's config:
 
 ## Memory Protocol Full Text
 
-The Memory Protocol teaches agents **when** and **how** to use Engram's MCP tools. Without it, the agent has the tools but no behavioral guidance. Add this to your agent's prompt file (see README for per-agent locations).
+The Memory Protocol teaches agents **when** and **how** to use Lore's MCP tools. Without it, the agent has the tools but no behavioral guidance. Add this to your agent's prompt file (see README for per-agent locations).
 
 ### WHEN TO SAVE (mandatory — not optional)
 
@@ -455,7 +455,7 @@ This is NOT optional. If you skip this, the next session starts blind.
 
 ### PASSIVE CAPTURE — automatic learning extraction
 
-When completing a task or subtask, include a `## Key Learnings:` section at the end of your response with numbered items. Engram will automatically extract and save these as observations.
+When completing a task or subtask, include a `## Key Learnings:` section at the end of your response with numbered items. Lore will automatically extract and save these as observations.
 
 Example:
 ```
@@ -511,38 +511,38 @@ Separate table captures what the USER asked (not just tool calls). Gives future 
 
 Share memories across machines, backup, or migrate:
 
-- `engram export` — JSON dump of all sessions, observations, prompts
-- `engram import <file>` — Load from JSON, sessions use INSERT OR IGNORE (skip duplicates), atomic transaction
+- `lore export` — JSON dump of all sessions, observations, prompts
+- `lore import <file>` — Load from JSON, sessions use INSERT OR IGNORE (skip duplicates), atomic transaction
 
 ### 6. Git Sync (Chunked)
 
 Share memories through git repositories using compressed chunks with a manifest index.
 
-- `engram sync` — Exports new memories as a gzipped JSONL chunk to `.engram/chunks/`
-- `engram sync --all` — Exports ALL memories from every project (ignores directory-based filter)
-- `engram sync --import` — Imports chunks listed in the manifest that haven't been imported yet
-- `engram sync --status` — Shows how many chunks exist locally vs remotely, and how many are pending import
-- `engram sync --project NAME` — Filters export to a specific project
+- `lore sync` — Exports new memories as a gzipped JSONL chunk to `.lore/chunks/`
+- `lore sync --all` — Exports ALL memories from every project (ignores directory-based filter)
+- `lore sync --import` — Imports chunks listed in the manifest that haven't been imported yet
+- `lore sync --status` — Shows how many chunks exist locally vs remotely, and how many are pending import
+- `lore sync --project NAME` — Filters export to a specific project
 
 **Architecture**:
 ```
-.engram/
+.lore/
 ├── manifest.json          ← index of all chunks (small, git-mergeable)
 ├── chunks/
 │   ├── a3f8c1d2.jsonl.gz ← chunk 1 (gzipped JSONL)
 │   ├── b7d2e4f1.jsonl.gz ← chunk 2
 │   └── ...
-└── engram.db              ← local working DB (gitignored)
+└── lore.db              ← local working DB (gitignored)
 ```
 
 **Why chunks?**
-- Each `engram sync` creates a NEW chunk — old chunks are never modified
+- Each `lore sync` creates a NEW chunk — old chunks are never modified
 - No merge conflicts: each dev creates independent chunks, git just adds files
 - Chunks are content-hashed (SHA-256 prefix) — each chunk is imported only once
 - The manifest is the only file git diffs — it's small and append-only
 - Compressed: a chunk with 8 sessions + 10 observations = ~2KB
 
-**Auto-import**: The OpenCode plugin detects `.engram/manifest.json` at startup and runs `engram sync --import` to load any new chunks. Clone a repo → open OpenCode → team memories are loaded.
+**Auto-import**: The OpenCode plugin detects `.lore/manifest.json` at startup and runs `lore sync --import` to load any new chunks. Clone a repo → open OpenCode → team memories are loaded.
 
 **Tracking**: The local DB stores a `sync_chunks` table with chunk IDs that have been imported. This prevents re-importing the same data if `sync --import` runs multiple times.
 
@@ -588,12 +588,12 @@ The plugin still counts tool calls per session (for session end summary stats) b
 
 ## OpenCode Plugin
 
-Install with `engram setup opencode` — this copies the plugin to `~/.config/opencode/plugins/engram.ts` AND auto-registers the MCP server in `opencode.json`.
+Install with `lore setup opencode` — this copies the plugin to `~/.config/opencode/plugins/lore.ts` AND auto-registers the MCP server in `opencode.json`.
 
 A thin TypeScript adapter that:
 
-1. **Auto-starts** the engram binary if not running
-2. **Auto-imports** git-synced memories from `.engram/memories.json` if present in the project
+1. **Auto-starts** the lore binary if not running
+2. **Auto-imports** git-synced memories from `.lore/memories.json` if present in the project
 3. **Captures events**: `session.created`, `session.idle`, `session.deleted`, `message.updated`
 4. **Tracks tool count**: Counts tool calls per session (for session end stats), but does NOT persist raw tool observations
 5. **Captures user prompts**: From `message.updated` events (>10 chars)
@@ -603,7 +603,7 @@ A thin TypeScript adapter that:
 
 ### Session Resilience
 
-The plugin uses `ensureSession()` — an idempotent function that creates the session in engram if it doesn't exist yet. This is called from every hook that receives a `sessionID`, not just `session.created`. This means:
+The plugin uses `ensureSession()` — an idempotent function that creates the session in lore if it doesn't exist yet. This is called from every hook that receives a `sessionID`, not just `session.created`. This means:
 
 - **Plugin reload**: If OpenCode restarts or the plugin is reloaded mid-session, the session is re-created on the next tool call or compaction event
 - **Reconnect**: If you reconnect to an existing session, the session is created on-demand
@@ -617,7 +617,7 @@ The `tool.execute.after` hook receives:
 - **`input`**: `{ tool, sessionID, callID, args }` — `input.sessionID` identifies the OpenCode session
 - **`output`**: `{ title, output, metadata }` — `output.output` has the result string
 
-### ENGRAM_TOOLS (excluded from tool count)
+### LORE_TOOLS (excluded from tool count)
 
 `mem_search`, `mem_save`, `mem_update`, `mem_delete`, `mem_suggest_topic_key`, `mem_save_prompt`, `mem_session_summary`, `mem_context`, `mem_stats`, `mem_timeline`, `mem_get_observation`, `mem_session_start`, `mem_session_end`, `mem_capture_passive`, `mem_merge_projects`
 
@@ -648,19 +648,19 @@ The `tool.execute.after` hook receives:
 ### From source
 
 ```bash
-git clone https://github.com/alanbuscaglia/engram.git
-cd engram
-go build -o engram ./cmd/engram
-go install ./cmd/engram
+git clone https://github.com/alferio94/lore.git
+cd lore
+go build -o lore ./cmd/lore
+go install ./cmd/lore
 ```
 
 ### Binary location
 
-After `go install`: `$GOPATH/bin/engram` (typically `~/go/bin/engram`)
+After `go install`: `$GOPATH/bin/lore` (typically `~/go/bin/lore`)
 
 ### Data location
 
-`~/.engram/engram.db` (SQLite database, created on first run)
+`~/.lore/lore.db` (SQLite database, created on first run)
 
 ---
 

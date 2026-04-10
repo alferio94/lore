@@ -1,11 +1,11 @@
 #!/bin/bash
-# Engram — Post-compaction hook for Claude Code
+# Lore — Post-compaction hook for Claude Code
 #
 # When compaction happens, inject Memory Protocol + context and instruct
 # the agent to persist the compacted summary via mem_session_summary.
 
-ENGRAM_PORT="${ENGRAM_PORT:-7437}"
-ENGRAM_URL="http://127.0.0.1:${ENGRAM_PORT}"
+LORE_PORT="${LORE_PORT:-7437}"
+LORE_URL="http://127.0.0.1:${LORE_PORT}"
 
 # Load shared helpers
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -19,7 +19,7 @@ PROJECT=$(detect_project "$CWD")
 
 # Ensure session exists
 if [ -n "$SESSION_ID" ] && [ -n "$PROJECT" ]; then
-  curl -sf "${ENGRAM_URL}/sessions" \
+  curl -sf "${LORE_URL}/sessions" \
     -X POST \
     -H "Content-Type: application/json" \
     -d "$(jq -n --arg id "$SESSION_ID" --arg project "$PROJECT" --arg dir "$CWD" \
@@ -29,13 +29,13 @@ fi
 
 # Fetch context from previous sessions
 ENCODED_PROJECT=$(printf '%s' "$PROJECT" | jq -sRr @uri)
-CONTEXT=$(curl -sf "${ENGRAM_URL}/context?project=${ENCODED_PROJECT}" --max-time 3 2>/dev/null | jq -r '.context // empty')
+CONTEXT=$(curl -sf "${LORE_URL}/context?project=${ENCODED_PROJECT}" --max-time 3 2>/dev/null | jq -r '.context // empty')
 
 # Inject Memory Protocol + compaction instruction + context
 cat <<'PROTOCOL'
-## Engram Persistent Memory — ACTIVE PROTOCOL
+## Lore Persistent Memory — ACTIVE PROTOCOL
 
-You have engram memory tools. This protocol is MANDATORY and ALWAYS ACTIVE.
+You have lore memory tools. This protocol is MANDATORY and ALWAYS ACTIVE.
 
 ### CORE TOOLS — always available, no ToolSearch needed
 mem_save, mem_search, mem_context, mem_session_summary, mem_get_observation, mem_save_prompt

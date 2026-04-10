@@ -1,16 +1,16 @@
 import { App, PluginSettingTab, Setting, Notice } from "obsidian";
-import type EngramBrainPlugin from "./main";
+import type LoreBrainPlugin from "./main";
 
 // ─── Settings Interface ────────────────────────────────────────────────────────
 
-export interface EngramSettings {
-	/** Base URL of the Engram server. Default: http://127.0.0.1:7437 */
-	engramUrl: string;
+export interface LoreSettings {
+	/** Base URL of the Lore server. Default: http://127.0.0.1:7437 */
+	loreUrl: string;
 	/** Auto-sync interval in minutes. 0 = manual only. */
 	autoSyncMinutes: number;
 	/** Project name filter. Empty string = sync all projects. */
 	projectFilter: string;
-	/** Vault subfolder where notes are written. Default: "engram". */
+	/** Vault subfolder where notes are written. Default: "lore". */
 	vaultSubfolder: string;
 	/** ISO timestamp of the last successful sync. Empty = never synced. */
 	lastSyncAt: string;
@@ -18,21 +18,21 @@ export interface EngramSettings {
 	lastSyncCount: number;
 }
 
-export const DEFAULT_SETTINGS: EngramSettings = {
-	engramUrl: "http://127.0.0.1:7437",
+export const DEFAULT_SETTINGS: LoreSettings = {
+	loreUrl: "http://127.0.0.1:7437",
 	autoSyncMinutes: 0,
 	projectFilter: "",
-	vaultSubfolder: "engram",
+	vaultSubfolder: "lore",
 	lastSyncAt: "",
 	lastSyncCount: 0,
 };
 
 // ─── Settings Tab ─────────────────────────────────────────────────────────────
 
-export class EngramSettingTab extends PluginSettingTab {
-	plugin: EngramBrainPlugin;
+export class LoreSettingTab extends PluginSettingTab {
+	plugin: LoreBrainPlugin;
 
-	constructor(app: App, plugin: EngramBrainPlugin) {
+	constructor(app: App, plugin: LoreBrainPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
@@ -41,24 +41,24 @@ export class EngramSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		containerEl.createEl("h2", { text: "Engram Brain" });
+		containerEl.createEl("h2", { text: "Lore Brain" });
 		containerEl.createEl("p", {
-			text: "Sync your Engram persistent memory into this vault as interconnected markdown notes.",
+			text: "Sync your Lore persistent memory into this vault as interconnected markdown notes.",
 			cls: "setting-item-description",
 		});
 
-		// ── Engram URL ──────────────────────────────────────────────────────────
+		// ── Lore URL ──────────────────────────────────────────────────────────
 		new Setting(containerEl)
-			.setName("Engram URL")
+			.setName("Lore URL")
 			.setDesc(
-				"Base URL of the running Engram server. Must be reachable from Obsidian."
+				"Base URL of the running Lore server. Must be reachable from Obsidian."
 			)
 			.addText((text) => {
 				text
 					.setPlaceholder("http://127.0.0.1:7437")
-					.setValue(this.plugin.settings.engramUrl)
+					.setValue(this.plugin.settings.loreUrl)
 					.onChange(async (value) => {
-						this.plugin.settings.engramUrl = value.trim();
+						this.plugin.settings.loreUrl = value.trim();
 						await this.plugin.saveSettings();
 					});
 				text.inputEl.style.width = "300px";
@@ -66,11 +66,11 @@ export class EngramSettingTab extends PluginSettingTab {
 			.addButton((button) => {
 				button
 					.setButtonText("Test Connection")
-					.setTooltip("Verify the Engram server is reachable")
+					.setTooltip("Verify the Lore server is reachable")
 					.onClick(async () => {
-						const url = this.plugin.settings.engramUrl.trim();
+						const url = this.plugin.settings.loreUrl.trim();
 						if (!url) {
-							new Notice("Engram URL is required");
+							new Notice("Lore URL is required");
 							return;
 						}
 						try {
@@ -78,7 +78,7 @@ export class EngramSettingTab extends PluginSettingTab {
 								signal: AbortSignal.timeout(3000),
 							});
 							if (res.ok) {
-								new Notice("✓ Connected to Engram server");
+								new Notice("✓ Connected to Lore server");
 							} else {
 								new Notice(
 									`Connection failed: server returned ${res.status}`
@@ -86,7 +86,7 @@ export class EngramSettingTab extends PluginSettingTab {
 							}
 						} catch {
 							new Notice(
-								"Sync failed: could not reach engram server"
+								"Sync failed: could not reach lore server"
 							);
 						}
 					});
@@ -123,7 +123,7 @@ export class EngramSettingTab extends PluginSettingTab {
 			)
 			.addText((text) => {
 				text
-					.setPlaceholder("e.g. engram or my-project")
+					.setPlaceholder("e.g. lore or my-project")
 					.setValue(this.plugin.settings.projectFilter)
 					.onChange(async (value) => {
 						this.plugin.settings.projectFilter = value.trim();
@@ -135,14 +135,14 @@ export class EngramSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Vault subfolder")
 			.setDesc(
-				"Folder inside this vault where Engram notes are written. Never touches files outside this folder."
+				"Folder inside this vault where Lore notes are written. Never touches files outside this folder."
 			)
 			.addText((text) => {
 				text
-					.setPlaceholder("engram")
+					.setPlaceholder("lore")
 					.setValue(this.plugin.settings.vaultSubfolder)
 					.onChange(async (value) => {
-						const folder = value.trim() || "engram";
+						const folder = value.trim() || "lore";
 						this.plugin.settings.vaultSubfolder = folder;
 						await this.plugin.saveSettings();
 					});
@@ -158,7 +158,7 @@ export class EngramSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Sync now")
-			.setDesc("Manually trigger a sync with the Engram server.")
+			.setDesc("Manually trigger a sync with the Lore server.")
 			.addButton((button) => {
 				button
 					.setButtonText("Sync")

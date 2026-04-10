@@ -1,7 +1,7 @@
 ---
-name: engram-ui-elements
+name: lore-ui-elements
 description: >
-  Creation rules for Engram UI elements, pages, cards, metrics, and detail flows.
+  Creation rules for Lore UI elements, pages, cards, metrics, and detail flows.
   Trigger: Adding or changing dashboard UI components or connected browsing flows.
 license: Apache-2.0
 metadata:

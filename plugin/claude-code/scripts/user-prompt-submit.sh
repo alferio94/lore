@@ -1,8 +1,8 @@
 #!/bin/bash
-# Engram — UserPromptSubmit hook for Claude Code
+# Lore — UserPromptSubmit hook for Claude Code
 #
 # On the FIRST message of a session: injects a ToolSearch instruction to force
-# Claude Code to load all engram memory tools (which are deferred by default).
+# Claude Code to load all lore memory tools (which are deferred by default).
 #
 # On subsequent messages: checks when the last mem_save was for the current
 # project. If it's been > 15 minutes AND the session has been active > 5
@@ -10,8 +10,8 @@
 #
 # MUST exit 0 always and output valid JSON — otherwise Claude Code blocks the message.
 
-ENGRAM_PORT="${ENGRAM_PORT:-7437}"
-ENGRAM_URL="http://127.0.0.1:${ENGRAM_PORT}"
+LORE_PORT="${LORE_PORT:-7437}"
+LORE_URL="http://127.0.0.1:${LORE_PORT}"
 
 # Load shared helpers
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -35,11 +35,11 @@ OUTPUT="{}"
 
 # Build a stable session key — prefer SESSION_ID, fall back to project name
 if [ -n "$SESSION_ID" ]; then
-  SESSION_KEY="engram-claude-${SESSION_ID}-tools-loaded"
+  SESSION_KEY="lore-claude-${SESSION_ID}-tools-loaded"
 else
   # No session ID available — key on project to avoid repeated injections
   SAFE_PROJECT=$(printf '%s' "${PROJECT:-unknown}" | tr -cs 'a-zA-Z0-9_-' '_')
-  SESSION_KEY="engram-claude-${SAFE_PROJECT}-$$-tools-loaded"
+  SESSION_KEY="lore-claude-${SAFE_PROJECT}-$$-tools-loaded"
 fi
 
 STATE_FILE="/tmp/${SESSION_KEY}"
@@ -51,7 +51,7 @@ if [ ! -f "$STATE_FILE" ]; then
 
   # Inject ToolSearch + mem_context instruction.
   # Use --arg so jq handles all escaping; use printf to avoid echo interpreting \n.
-  TOOL_MSG="CRITICAL FIRST ACTION — Execute this ToolSearch NOW before responding to the user:"$'\n'"select:mcp__plugin_engram_engram__mem_save,mcp__plugin_engram_engram__mem_search,mcp__plugin_engram_engram__mem_context,mcp__plugin_engram_engram__mem_session_summary,mcp__plugin_engram_engram__mem_get_observation,mcp__plugin_engram_engram__mem_save_prompt"$'\n\n'"After loading tools, call mem_context to check for prior session history before responding."
+  TOOL_MSG="CRITICAL FIRST ACTION — Execute this ToolSearch NOW before responding to the user:"$'\n'"select:mcp__plugin_lore_lore__mem_save,mcp__plugin_lore_lore__mem_search,mcp__plugin_lore_lore__mem_context,mcp__plugin_lore_lore__mem_session_summary,mcp__plugin_lore_lore__mem_get_observation,mcp__plugin_lore_lore__mem_save_prompt"$'\n\n'"After loading tools, call mem_context to check for prior session history before responding."
   OUTPUT=$(jq -n --arg msg "$TOOL_MSG" '{"systemMessage": $msg}')
 
   printf '%s\n' "$OUTPUT"
@@ -71,7 +71,7 @@ fi
 # Get session start time to check if session is > 5 minutes old
 SESSION_START=""
 if [ -n "$SESSION_ID" ]; then
-  SESSION_START=$(curl -sf "${ENGRAM_URL}/sessions/${SESSION_ID}" --max-time 0.2 2>/dev/null \
+  SESSION_START=$(curl -sf "${LORE_URL}/sessions/${SESSION_ID}" --max-time 0.2 2>/dev/null \
     | jq -r '.started_at // empty' 2>/dev/null)
 fi
 
@@ -93,7 +93,7 @@ fi
 # Fetch the most recent observation for this project (any type)
 ENCODED_PROJECT=$(printf '%s' "$PROJECT" | jq -sRr @uri)
 LAST_SAVE_JSON=$(curl -sf \
-  "${ENGRAM_URL}/observations?project=${ENCODED_PROJECT}&limit=1&sort=created_at:desc" \
+  "${LORE_URL}/observations?project=${ENCODED_PROJECT}&limit=1&sort=created_at:desc" \
   --max-time 0.2 2>/dev/null)
 
 if [ -z "$LAST_SAVE_JSON" ]; then

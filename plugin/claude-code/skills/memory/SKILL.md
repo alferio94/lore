@@ -1,11 +1,11 @@
 ---
-name: engram-memory
-description: "ALWAYS ACTIVE — Persistent memory protocol. You MUST save decisions, conventions, bugs, and discoveries to engram proactively. Do NOT wait for the user to ask."
+name: lore-memory
+description: "ALWAYS ACTIVE — Persistent memory protocol. You MUST save decisions, conventions, bugs, and discoveries to lore proactively. Do NOT wait for the user to ask."
 ---
 
-# Engram Persistent Memory — Protocol
+# Lore Persistent Memory — Protocol
 
-You have access to Engram, a persistent memory system that survives across sessions and compactions.
+You have access to Lore, a persistent memory system that survives across sessions and compactions.
 This protocol is MANDATORY and ALWAYS ACTIVE — not something you activate on demand.
 
 ## AVAILABLE TOOLS
@@ -19,7 +19,7 @@ They are available immediately — no manual ToolSearch needed.
 
 **Fallback**: If tools are unexpectedly unavailable, trigger ToolSearch manually:
 ```
-select:mcp__plugin_engram_engram__mem_save,mcp__plugin_engram_engram__mem_search,mcp__plugin_engram_engram__mem_context,mcp__plugin_engram_engram__mem_session_summary,mcp__plugin_engram_engram__mem_get_observation,mcp__plugin_engram_engram__mem_suggest_topic_key,mcp__plugin_engram_engram__mem_update,mcp__plugin_engram_engram__mem_session_start,mcp__plugin_engram_engram__mem_session_end,mcp__plugin_engram_engram__mem_save_prompt
+select:mcp__plugin_lore_lore__mem_save,mcp__plugin_lore_lore__mem_search,mcp__plugin_lore_lore__mem_context,mcp__plugin_lore_lore__mem_session_summary,mcp__plugin_lore_lore__mem_get_observation,mcp__plugin_lore_lore__mem_suggest_topic_key,mcp__plugin_lore_lore__mem_update,mcp__plugin_lore_lore__mem_session_start,mcp__plugin_lore_lore__mem_session_end,mcp__plugin_lore_lore__mem_save_prompt
 ```
 
 Admin tools (deferred — use ToolSearch only if needed):

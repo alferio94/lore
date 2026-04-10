@@ -1,7 +1,7 @@
 ---
-name: engram-server-api
+name: lore-server-api
 description: >
-  API contract guardrails for Engram server changes.
+  API contract guardrails for Lore server changes.
   Trigger: Any route, handler, payload, or status code modification.
 license: Apache-2.0
 metadata:

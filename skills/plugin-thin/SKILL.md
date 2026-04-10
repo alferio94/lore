@@ -1,5 +1,5 @@
 ---
-name: engram-plugin-thin
+name: lore-plugin-thin
 description: >
   Adapter boundary rules for plugin integrations.
   Trigger: Changes in plugin scripts/hooks for Claude, OpenCode, Gemini, or Codex.

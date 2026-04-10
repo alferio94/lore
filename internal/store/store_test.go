@@ -358,7 +358,7 @@ func TestDifferentTopicsDoNotReplaceEachOther(t *testing.T) {
 
 func TestNewMigratesLegacyObservationIDSchema(t *testing.T) {
 	dataDir := t.TempDir()
-	dbPath := filepath.Join(dataDir, "engram.db")
+	dbPath := filepath.Join(dataDir, "lore.db")
 
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -453,7 +453,7 @@ func TestNewMigratesLegacyObservationIDSchema(t *testing.T) {
 
 func TestNewMigratesLegacyUserPromptsSyncIDSchema(t *testing.T) {
 	dataDir := t.TempDir()
-	dbPath := filepath.Join(dataDir, "engram.db")
+	dbPath := filepath.Join(dataDir, "lore.db")
 
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -1871,7 +1871,7 @@ func TestNewErrorBranches(t *testing.T) {
 
 	t.Run("fails when db path is a directory", func(t *testing.T) {
 		dataDir := t.TempDir()
-		dbAsDir := filepath.Join(dataDir, "engram.db")
+		dbAsDir := filepath.Join(dataDir, "lore.db")
 		if err := os.Mkdir(dbAsDir, 0755); err != nil {
 			t.Fatalf("mkdir db path: %v", err)
 		}
@@ -1887,7 +1887,7 @@ func TestNewErrorBranches(t *testing.T) {
 
 	t.Run("fails when migration encounters conflicting object", func(t *testing.T) {
 		dataDir := t.TempDir()
-		dbPath := filepath.Join(dataDir, "engram.db")
+		dbPath := filepath.Join(dataDir, "lore.db")
 
 		db, err := sql.Open("sqlite", dbPath)
 		if err != nil {
@@ -3186,7 +3186,7 @@ func TestEnrollProjectBackfillIsIdempotentAndSkipsExistingMutations(t *testing.T
 
 func TestNewRepairsAlreadyEnrolledProjectsMissingHistoricalSyncMutations(t *testing.T) {
 	dataDir := t.TempDir()
-	dbPath := filepath.Join(dataDir, "engram.db")
+	dbPath := filepath.Join(dataDir, "lore.db")
 
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {

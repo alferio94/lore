@@ -1,7 +1,7 @@
 ---
-name: engram-commit-hygiene
+name: lore-commit-hygiene
 description: >
-  Commit and branch naming standards for Engram contributors, enforced by GitHub rulesets.
+  Commit and branch naming standards for Lore contributors, enforced by GitHub rulesets.
   Trigger: Any commit creation, review, or branch cleanup.
 license: Apache-2.0
 metadata:

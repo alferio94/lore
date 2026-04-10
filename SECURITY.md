@@ -15,7 +15,7 @@ Only the latest stable release receives security fixes.
 
 Report security issues privately via one of these channels:
 
-1. **GitHub Security Advisories** (preferred): [Report a vulnerability](https://github.com/Gentleman-Programming/engram/security/advisories/new)
+1. **GitHub Security Advisories** (preferred): [Report a vulnerability](https://github.com/alferio94/lore/security/advisories/new)
 2. **Email**: Contact the maintainers directly through the GitHub profile if the advisory flow is unavailable.
 
 ### What to Include
@@ -34,10 +34,10 @@ Report security issues privately via one of these channels:
 
 ### Scope
 
-Engram is a local-first CLI tool that writes to a local SQLite database. The attack surface is intentionally small:
+Lore is a local-first CLI tool that writes to a local SQLite database. The attack surface is intentionally small:
 
 - **In scope**: privilege escalation, data corruption, path traversal, injection in MCP/HTTP API inputs, memory leaks exposing sensitive data
-- **Out of scope**: issues requiring physical access to the machine where engram is installed, or issues that require the attacker to already have access to the user's home directory
+- **Out of scope**: issues requiring physical access to the machine where lore is installed, or issues that require the attacker to already have access to the user's home directory
 
 ## Recognition
 

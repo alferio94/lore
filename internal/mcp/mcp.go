@@ -1,16 +1,16 @@
-// Package mcp implements the Model Context Protocol server for Engram.
+// Package mcp implements the Model Context Protocol server for Lore.
 //
 // This exposes memory tools via MCP stdio transport so ANY agent
-// (OpenCode, Claude Code, Cursor, Windsurf, etc.) can use Engram's
+// (OpenCode, Claude Code, Cursor, Windsurf, etc.) can use Lore's
 // persistent memory just by adding it as an MCP server.
 //
 // Tool profiles allow agents to load only the tools they need:
 //
-//	engram mcp                    → all 15 tools (default)
-//	engram mcp --tools=agent      → 11 tools agents actually use (per skill files)
-//	engram mcp --tools=admin      → 4 tools for TUI/CLI (delete, stats, timeline, merge)
-//	engram mcp --tools=agent,admin → combine profiles
-//	engram mcp --tools=mem_save,mem_search → individual tool names
+//	lore mcp                    → all 15 tools (default)
+//	lore mcp --tools=agent      → 11 tools agents actually use (per skill files)
+//	lore mcp --tools=admin      → 4 tools for TUI/CLI (delete, stats, timeline, merge)
+//	lore mcp --tools=agent,admin → combine profiles
+//	lore mcp --tools=lore_save,lore_search → individual tool names
 package mcp
 
 import (
@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"strings"
 
-	projectpkg "github.com/Gentleman-Programming/engram/internal/project"
-	"github.com/Gentleman-Programming/engram/internal/store"
+	projectpkg "github.com/alferio94/lore/internal/project"
+	"github.com/alferio94/lore/internal/store"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -38,12 +38,12 @@ var loadMCPStats = func(s *store.Store) (*store.Stats, error) {
 // ─── Tool Profiles ───────────────────────────────────────────────────────────
 //
 // "agent" — tools AI agents use during coding sessions:
-//   mem_save, mem_search, mem_context, mem_session_summary,
-//   mem_session_start, mem_session_end, mem_get_observation,
-//   mem_suggest_topic_key, mem_capture_passive, mem_save_prompt
+//   lore_save, lore_search, lore_context, lore_session_summary,
+//   lore_session_start, lore_session_end, lore_get_observation,
+//   lore_suggest_topic_key, lore_capture_passive, lore_save_prompt
 //
 // "admin" — tools for manual curation, TUI, and dashboards:
-//   mem_update, mem_delete, mem_stats, mem_timeline, mem_merge_projects
+//   lore_update, lore_delete, lore_stats, lore_timeline, lore_merge_projects
 //
 // "all" (default) — every tool registered.
 
@@ -51,26 +51,26 @@ var loadMCPStats = func(s *store.Store) (*store.Stats, error) {
 // Sourced from actual skill files and memory protocol instructions
 // across all 4 supported agents (Claude Code, OpenCode, Gemini CLI, Codex).
 var ProfileAgent = map[string]bool{
-	"mem_save":              true, // proactive save — referenced 17 times across protocols
-	"mem_search":            true, // search past memories — referenced 6 times
-	"mem_context":           true, // recent context from previous sessions — referenced 10 times
-	"mem_session_summary":   true, // end-of-session summary — referenced 16 times
-	"mem_session_start":     true, // register session start
-	"mem_session_end":       true, // mark session completed
-	"mem_get_observation":   true, // full observation content after search — referenced 4 times
-	"mem_suggest_topic_key": true, // stable topic key for upserts — referenced 3 times
-	"mem_capture_passive":   true, // extract learnings from text — referenced in Gemini/Codex protocol
-	"mem_save_prompt":       true, // save user prompts
-	"mem_update":            true, // update observation by ID — skills say "use mem_update when you have an exact ID to correct"
+	"lore_save":              true, // proactive save — referenced 17 times across protocols
+	"lore_search":            true, // search past memories — referenced 6 times
+	"lore_context":           true, // recent context from previous sessions — referenced 10 times
+	"lore_session_summary":   true, // end-of-session summary — referenced 16 times
+	"lore_session_start":     true, // register session start
+	"lore_session_end":       true, // mark session completed
+	"lore_get_observation":   true, // full observation content after search — referenced 4 times
+	"lore_suggest_topic_key": true, // stable topic key for upserts — referenced 3 times
+	"lore_capture_passive":   true, // extract learnings from text — referenced in Gemini/Codex protocol
+	"lore_save_prompt":       true, // save user prompts
+	"lore_update":            true, // update observation by ID — skills say "use lore_update when you have an exact ID to correct"
 }
 
 // ProfileAdmin contains tools for TUI, dashboards, and manual curation
 // that are NOT referenced in any agent skill or memory protocol.
 var ProfileAdmin = map[string]bool{
-	"mem_delete":         true, // only in OpenCode's ENGRAM_TOOLS filter, not in any agent instructions
-	"mem_stats":          true, // only in OpenCode's ENGRAM_TOOLS filter, not in any agent instructions
-	"mem_timeline":       true, // only in OpenCode's ENGRAM_TOOLS filter, not in any agent instructions
-	"mem_merge_projects": true, // destructive curation tool — not for agent use
+	"lore_delete":         true, // only in OpenCode's ENGRAM_TOOLS filter, not in any agent instructions
+	"lore_stats":          true, // only in OpenCode's ENGRAM_TOOLS filter, not in any agent instructions
+	"lore_timeline":       true, // only in OpenCode's ENGRAM_TOOLS filter, not in any agent instructions
+	"lore_merge_projects": true, // destructive curation tool — not for agent use
 }
 
 // Profiles maps profile names to their tool sets.
@@ -118,24 +118,24 @@ func NewServer(s *store.Store) *server.MCPServer {
 	return NewServerWithConfig(s, MCPConfig{}, nil)
 }
 
-// serverInstructions tells MCP clients when to use Engram's tools.
+// serverInstructions tells MCP clients when to use Lore's tools.
 // 6 core tools are eager (always in context). The rest are deferred
 // and require ToolSearch to load.
-const serverInstructions = `Engram provides persistent memory that survives across sessions and compactions.
+const serverInstructions = `Lore provides persistent memory that survives across sessions and compactions.
 
 CORE TOOLS (always available — use without ToolSearch):
-  mem_save — save decisions, bugs, discoveries, conventions PROACTIVELY (do not wait to be asked)
-  mem_search — find past work, decisions, or context from previous sessions
-  mem_context — get recent session history (call at session start or after compaction)
-  mem_session_summary — save end-of-session summary (MANDATORY before saying "done")
-  mem_get_observation — get full untruncated content of a search result by ID
-  mem_save_prompt — save user prompt for context
+  lore_save — save decisions, bugs, discoveries, conventions PROACTIVELY (do not wait to be asked)
+  lore_search — find past work, decisions, or context from previous sessions
+  lore_context — get recent session history (call at session start or after compaction)
+  lore_session_summary — save end-of-session summary (MANDATORY before saying "done")
+  lore_get_observation — get full untruncated content of a search result by ID
+  lore_save_prompt — save user prompt for context
 
 DEFERRED TOOLS (use ToolSearch when needed):
-  mem_update, mem_suggest_topic_key, mem_session_start, mem_session_end,
-  mem_stats, mem_delete, mem_timeline, mem_capture_passive, mem_merge_projects
+  lore_update, lore_suggest_topic_key, lore_session_start, lore_session_end,
+  lore_stats, lore_delete, lore_timeline, lore_capture_passive, lore_merge_projects
 
-PROACTIVE SAVE RULE: Call mem_save immediately after ANY decision, bug fix, discovery, or convention — not just when asked.`
+PROACTIVE SAVE RULE: Call lore_save immediately after ANY decision, bug fix, discovery, or convention — not just when asked.`
 
 // NewServerWithTools creates an MCP server registering only the tools in
 // the allowlist. If allowlist is nil, all tools are registered.
@@ -147,7 +147,7 @@ func NewServerWithTools(s *store.Store, allowlist map[string]bool) *server.MCPSe
 // default project detection and optional tool allowlist.
 func NewServerWithConfig(s *store.Store, cfg MCPConfig, allowlist map[string]bool) *server.MCPServer {
 	srv := server.NewMCPServer(
-		"engram",
+		"lore",
 		"0.1.0",
 		server.WithToolCapabilities(true),
 		server.WithInstructions(serverInstructions),
@@ -167,10 +167,10 @@ func shouldRegister(name string, allowlist map[string]bool) bool {
 }
 
 func registerTools(srv *server.MCPServer, s *store.Store, cfg MCPConfig, allowlist map[string]bool) {
-	// ─── mem_search (profile: agent, core — always in context) ─────────
-	if shouldRegister("mem_search", allowlist) {
+	// ─── lore_search (profile: agent, core — always in context) ─────────
+	if shouldRegister("lore_search", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_search",
+			mcp.NewTool("lore_search",
 				mcp.WithDescription("Search your persistent memory across all sessions. Use this to find past decisions, bugs fixed, patterns used, files changed, or any context from previous coding sessions."),
 				mcp.WithTitleAnnotation("Search Memory"),
 				mcp.WithReadOnlyHintAnnotation(true),
@@ -198,10 +198,10 @@ func registerTools(srv *server.MCPServer, s *store.Store, cfg MCPConfig, allowli
 		)
 	}
 
-	// ─── mem_save (profile: agent, core — always in context) ───────────
-	if shouldRegister("mem_save", allowlist) {
+	// ─── lore_save (profile: agent, core — always in context) ───────────
+	if shouldRegister("lore_save", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_save",
+			mcp.NewTool("lore_save",
 				mcp.WithTitleAnnotation("Save Memory"),
 				mcp.WithReadOnlyHintAnnotation(false),
 				mcp.WithDestructiveHintAnnotation(false),
@@ -261,10 +261,10 @@ Examples:
 		)
 	}
 
-	// ─── mem_update (profile: agent, deferred) ──────────────────────────
-	if shouldRegister("mem_update", allowlist) {
+	// ─── lore_update (profile: agent, deferred) ──────────────────────────
+	if shouldRegister("lore_update", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_update",
+			mcp.NewTool("lore_update",
 				mcp.WithDescription("Update an existing observation by ID. Only provided fields are changed."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Update Memory"),
@@ -299,11 +299,11 @@ Examples:
 		)
 	}
 
-	// ─── mem_suggest_topic_key (profile: agent, deferred) ───────────────
-	if shouldRegister("mem_suggest_topic_key", allowlist) {
+	// ─── lore_suggest_topic_key (profile: agent, deferred) ───────────────
+	if shouldRegister("lore_suggest_topic_key", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_suggest_topic_key",
-				mcp.WithDescription("Suggest a stable topic_key for memory upserts. Use this before mem_save when you want evolving topics (like architecture decisions) to update a single observation over time."),
+			mcp.NewTool("lore_suggest_topic_key",
+				mcp.WithDescription("Suggest a stable topic_key for memory upserts. Use this before lore_save when you want evolving topics (like architecture decisions) to update a single observation over time."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Suggest Topic Key"),
 				mcp.WithReadOnlyHintAnnotation(true),
@@ -324,10 +324,10 @@ Examples:
 		)
 	}
 
-	// ─── mem_delete (profile: admin, deferred) ──────────────────────────
-	if shouldRegister("mem_delete", allowlist) {
+	// ─── lore_delete (profile: admin, deferred) ──────────────────────────
+	if shouldRegister("lore_delete", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_delete",
+			mcp.NewTool("lore_delete",
 				mcp.WithDescription("Delete an observation by ID. Soft-delete by default; set hard_delete=true for permanent deletion."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Delete Memory"),
@@ -347,10 +347,10 @@ Examples:
 		)
 	}
 
-	// ─── mem_save_prompt (profile: agent, eager) ────────────────────────
-	if shouldRegister("mem_save_prompt", allowlist) {
+	// ─── lore_save_prompt (profile: agent, eager) ────────────────────────
+	if shouldRegister("lore_save_prompt", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_save_prompt",
+			mcp.NewTool("lore_save_prompt",
 				mcp.WithDescription("Save a user prompt to persistent memory. Use this to record what the user asked — their intent, questions, and requests — so future sessions have context about the user's goals."),
 				mcp.WithTitleAnnotation("Save User Prompt"),
 				mcp.WithReadOnlyHintAnnotation(false),
@@ -372,10 +372,10 @@ Examples:
 		)
 	}
 
-	// ─── mem_context (profile: agent, core — always in context) ────────
-	if shouldRegister("mem_context", allowlist) {
+	// ─── lore_context (profile: agent, core — always in context) ────────
+	if shouldRegister("lore_context", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_context",
+			mcp.NewTool("lore_context",
 				mcp.WithDescription("Get recent memory context from previous sessions. Shows recent sessions and observations to understand what was done before."),
 				mcp.WithTitleAnnotation("Get Memory Context"),
 				mcp.WithReadOnlyHintAnnotation(true),
@@ -396,10 +396,10 @@ Examples:
 		)
 	}
 
-	// ─── mem_stats (profile: admin, deferred) ───────────────────────────
-	if shouldRegister("mem_stats", allowlist) {
+	// ─── lore_stats (profile: admin, deferred) ───────────────────────────
+	if shouldRegister("lore_stats", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_stats",
+			mcp.NewTool("lore_stats",
 				mcp.WithDescription("Show memory system statistics — total sessions, observations, and projects tracked."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Memory Stats"),
@@ -412,11 +412,11 @@ Examples:
 		)
 	}
 
-	// ─── mem_timeline (profile: admin, deferred) ────────────────────────
-	if shouldRegister("mem_timeline", allowlist) {
+	// ─── lore_timeline (profile: admin, deferred) ────────────────────────
+	if shouldRegister("lore_timeline", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_timeline",
-				mcp.WithDescription("Show chronological context around a specific observation. Use after mem_search to drill into the timeline of events surrounding a search result. This is the progressive disclosure pattern: search first, then timeline to understand context."),
+			mcp.NewTool("lore_timeline",
+				mcp.WithDescription("Show chronological context around a specific observation. Use after lore_search to drill into the timeline of events surrounding a search result. This is the progressive disclosure pattern: search first, then timeline to understand context."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Memory Timeline"),
 				mcp.WithReadOnlyHintAnnotation(true),
@@ -425,7 +425,7 @@ Examples:
 				mcp.WithOpenWorldHintAnnotation(false),
 				mcp.WithNumber("observation_id",
 					mcp.Required(),
-					mcp.Description("The observation ID to center the timeline on (from mem_search results)"),
+					mcp.Description("The observation ID to center the timeline on (from lore_search results)"),
 				),
 				mcp.WithNumber("before",
 					mcp.Description("Number of observations to show before the focus (default: 5)"),
@@ -438,11 +438,11 @@ Examples:
 		)
 	}
 
-	// ─── mem_get_observation (profile: agent, eager) ────────────────────
-	if shouldRegister("mem_get_observation", allowlist) {
+	// ─── lore_get_observation (profile: agent, eager) ────────────────────
+	if shouldRegister("lore_get_observation", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_get_observation",
-				mcp.WithDescription("Get the full content of a specific observation by ID. Use when you need the complete, untruncated content of an observation found via mem_search or mem_timeline."),
+			mcp.NewTool("lore_get_observation",
+				mcp.WithDescription("Get the full content of a specific observation by ID. Use when you need the complete, untruncated content of an observation found via lore_search or lore_timeline."),
 				mcp.WithTitleAnnotation("Get Observation"),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithDestructiveHintAnnotation(false),
@@ -457,10 +457,10 @@ Examples:
 		)
 	}
 
-	// ─── mem_session_summary (profile: agent, core — always in context) ─
-	if shouldRegister("mem_session_summary", allowlist) {
+	// ─── lore_session_summary (profile: agent, core — always in context) ─
+	if shouldRegister("lore_session_summary", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_session_summary",
+			mcp.NewTool("lore_session_summary",
 				mcp.WithTitleAnnotation("Save Session Summary"),
 				mcp.WithReadOnlyHintAnnotation(false),
 				mcp.WithDestructiveHintAnnotation(false),
@@ -512,10 +512,10 @@ GUIDELINES:
 		)
 	}
 
-	// ─── mem_session_start (profile: agent, deferred) ───────────────────
-	if shouldRegister("mem_session_start", allowlist) {
+	// ─── lore_session_start (profile: agent, deferred) ───────────────────
+	if shouldRegister("lore_session_start", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_session_start",
+			mcp.NewTool("lore_session_start",
 				mcp.WithDescription("Register the start of a new coding session. Call this at the beginning of a session to track activity."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Start Session"),
@@ -539,10 +539,10 @@ GUIDELINES:
 		)
 	}
 
-	// ─── mem_session_end (profile: agent, deferred) ─────────────────────
-	if shouldRegister("mem_session_end", allowlist) {
+	// ─── lore_session_end (profile: agent, deferred) ─────────────────────
+	if shouldRegister("lore_session_end", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_session_end",
+			mcp.NewTool("lore_session_end",
 				mcp.WithDescription("Mark a coding session as completed with an optional summary."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("End Session"),
@@ -562,10 +562,10 @@ GUIDELINES:
 		)
 	}
 
-	// ─── mem_capture_passive (profile: agent, deferred) ─────────────────
-	if shouldRegister("mem_capture_passive", allowlist) {
+	// ─── lore_capture_passive (profile: agent, deferred) ─────────────────
+	if shouldRegister("lore_capture_passive", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_capture_passive",
+			mcp.NewTool("lore_capture_passive",
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Capture Learnings"),
 				mcp.WithReadOnlyHintAnnotation(false),
@@ -595,11 +595,11 @@ Duplicates are automatically detected and skipped — safe to call multiple time
 		)
 	}
 
-	// ─── mem_merge_projects (profile: admin, deferred) ──────────────────
-	if shouldRegister("mem_merge_projects", allowlist) {
+	// ─── lore_merge_projects (profile: admin, deferred) ──────────────────
+	if shouldRegister("lore_merge_projects", allowlist) {
 		srv.AddTool(
-			mcp.NewTool("mem_merge_projects",
-				mcp.WithDescription("Merge memories from multiple project name variants into one canonical name. Use when you discover project name drift (e.g. 'Engram' and 'engram' should be the same project). DESTRUCTIVE — moves all records from source names to the canonical name."),
+			mcp.NewTool("lore_merge_projects",
+				mcp.WithDescription("Merge memories from multiple project name variants into one canonical name. Use when you discover project name drift (e.g. 'Lore' and 'lore' should be the same project). DESTRUCTIVE — moves all records from source names to the canonical name."),
 				mcp.WithDeferLoading(true),
 				mcp.WithTitleAnnotation("Merge Projects"),
 				mcp.WithReadOnlyHintAnnotation(false),
@@ -608,11 +608,11 @@ Duplicates are automatically detected and skipped — safe to call multiple time
 				mcp.WithOpenWorldHintAnnotation(false),
 				mcp.WithString("from",
 					mcp.Required(),
-					mcp.Description("Comma-separated list of project names to merge FROM (e.g. 'Engram,engram-memory,ENGRAM')"),
+					mcp.Description("Comma-separated list of project names to merge FROM (e.g. 'Lore,lore-memory,LORE')"),
 				),
 				mcp.WithString("to",
 					mcp.Required(),
-					mcp.Description("The canonical project name to merge INTO (e.g. 'engram')"),
+					mcp.Description("The canonical project name to merge INTO (e.g. 'lore')"),
 				),
 			),
 			handleMergeProjects(s),
@@ -670,7 +670,7 @@ func handleSearch(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 				r.CreatedAt, projectDisplay, r.Scope)
 		}
 		if anyTruncated {
-			fmt.Fprintf(&b, "---\nResults above are previews (300 chars). To read the full content of a specific memory, call mem_get_observation(id: <ID>).\n")
+			fmt.Fprintf(&b, "---\nResults above are previews (300 chars). To read the full content of a specific memory, call lore_get_observation(id: <ID>).\n")
 		}
 
 		return mcp.NewToolResultText(b.String()), nil

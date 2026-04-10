@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Gentleman-Programming/engram/internal/mcp"
-	"github.com/Gentleman-Programming/engram/internal/obsidian"
-	"github.com/Gentleman-Programming/engram/internal/store"
-	versioncheck "github.com/Gentleman-Programming/engram/internal/version"
+	"github.com/alferio94/lore/internal/mcp"
+	"github.com/alferio94/lore/internal/obsidian"
+	"github.com/alferio94/lore/internal/store"
+	versioncheck "github.com/alferio94/lore/internal/version"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
@@ -158,7 +158,7 @@ func TestPrintUsage(t *testing.T) {
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got: %q", stderr)
 	}
-	if !strings.Contains(stdout, "engram vtest-version") {
+	if !strings.Contains(stdout, "lore vtest-version") {
 		t.Fatalf("usage missing version: %q", stdout)
 	}
 	if !strings.Contains(stdout, "search <query>") || !strings.Contains(stdout, "setup [agent]") {
@@ -171,7 +171,7 @@ func TestPrintPostInstall(t *testing.T) {
 		agent   string
 		expects []string
 	}{
-		{agent: "opencode", expects: []string{"Restart OpenCode", "engram serve &"}},
+		{agent: "opencode", expects: []string{"Restart OpenCode", "lore serve &"}},
 		{agent: "gemini-cli", expects: []string{"Restart Gemini CLI", "~/.gemini/settings.json"}},
 		{agent: "codex", expects: []string{"Restart Codex", "~/.codex/config.toml"}},
 		{agent: "unknown", expects: nil},
@@ -298,7 +298,7 @@ func TestCmdSaveAndSearch(t *testing.T) {
 		t.Fatalf("unexpected save output: %q", stdout)
 	}
 
-	withArgs(t, "engram", "search", "my-content", "--type", "bugfix", "--project", "alpha", "--scope", "personal", "--limit", "1")
+	withArgs(t, "lore", "search", "my-content", "--type", "bugfix", "--project", "alpha", "--scope", "personal", "--limit", "1")
 	searchOut, searchErr := captureOutput(t, func() { cmdSearch(cfg) })
 	if searchErr != "" {
 		t.Fatalf("expected no stderr from search, got: %q", searchErr)
@@ -307,7 +307,7 @@ func TestCmdSaveAndSearch(t *testing.T) {
 		t.Fatalf("unexpected search output: %q", searchOut)
 	}
 
-	withArgs(t, "engram", "search", "definitely-not-found")
+	withArgs(t, "lore", "search", "definitely-not-found")
 	noneOut, noneErr := captureOutput(t, func() { cmdSearch(cfg) })
 	if noneErr != "" {
 		t.Fatalf("expected no stderr from empty search, got: %q", noneErr)
@@ -323,7 +323,7 @@ func TestCmdTimeline(t *testing.T) {
 	focusID := mustSeedObservation(t, cfg, "s-1", "proj", "note", "focus", "focus content", "project")
 	mustSeedObservation(t, cfg, "s-1", "proj", "note", "third", "third content", "project")
 
-	withArgs(t, "engram", "timeline", strconv.FormatInt(focusID, 10), "--before", "1", "--after", "1")
+	withArgs(t, "lore", "timeline", strconv.FormatInt(focusID, 10), "--before", "1", "--after", "1")
 	stdout, stderr := captureOutput(t, func() { cmdTimeline(cfg) })
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got: %q", stderr)
@@ -339,7 +339,7 @@ func TestCmdTimeline(t *testing.T) {
 func TestCmdContextAndStats(t *testing.T) {
 	cfg := testConfig(t)
 
-	withArgs(t, "engram", "context")
+	withArgs(t, "lore", "context")
 	emptyCtxOut, emptyCtxErr := captureOutput(t, func() { cmdContext(cfg) })
 	if emptyCtxErr != "" {
 		t.Fatalf("expected no stderr for empty context, got: %q", emptyCtxErr)
@@ -360,7 +360,7 @@ func TestCmdContextAndStats(t *testing.T) {
 	}
 	_ = s.Close()
 
-	withArgs(t, "engram", "context", "project-x")
+	withArgs(t, "lore", "context", "project-x")
 	ctxOut, ctxErr := captureOutput(t, func() { cmdContext(cfg) })
 	if ctxErr != "" {
 		t.Fatalf("expected no stderr for populated context, got: %q", ctxErr)
@@ -369,12 +369,12 @@ func TestCmdContextAndStats(t *testing.T) {
 		t.Fatalf("unexpected populated context output: %q", ctxOut)
 	}
 
-	withArgs(t, "engram", "stats")
+	withArgs(t, "lore", "stats")
 	statsOut, statsErr := captureOutput(t, func() { cmdStats(cfg) })
 	if statsErr != "" {
 		t.Fatalf("expected no stderr from stats, got: %q", statsErr)
 	}
-	if !strings.Contains(statsOut, "Engram Memory Stats") || !strings.Contains(statsOut, "project-x") {
+	if !strings.Contains(statsOut, "Lore Memory Stats") || !strings.Contains(statsOut, "project-x") {
 		t.Fatalf("unexpected stats output: %q", statsOut)
 	}
 }
@@ -387,7 +387,7 @@ func TestCmdExportAndImport(t *testing.T) {
 
 	exportPath := filepath.Join(t.TempDir(), "memories.json")
 
-	withArgs(t, "engram", "export", exportPath)
+	withArgs(t, "lore", "export", exportPath)
 	exportOut, exportErr := captureOutput(t, func() { cmdExport(sourceCfg) })
 	if exportErr != "" {
 		t.Fatalf("expected no stderr from export, got: %q", exportErr)
@@ -396,7 +396,7 @@ func TestCmdExportAndImport(t *testing.T) {
 		t.Fatalf("unexpected export output: %q", exportOut)
 	}
 
-	withArgs(t, "engram", "import", exportPath)
+	withArgs(t, "lore", "import", exportPath)
 	importOut, importErr := captureOutput(t, func() { cmdImport(targetCfg) })
 	if importErr != "" {
 		t.Fatalf("expected no stderr from import, got: %q", importErr)
@@ -429,7 +429,7 @@ func TestCmdSyncStatusExportAndImport(t *testing.T) {
 
 	mustSeedObservation(t, exportCfg, "s-sync", "sync-project", "note", "sync title", "sync content", "project")
 
-	withArgs(t, "engram", "sync", "--status")
+	withArgs(t, "lore", "sync", "--status")
 	statusOut, statusErr := captureOutput(t, func() { cmdSync(exportCfg) })
 	if statusErr != "" {
 		t.Fatalf("expected no stderr from status, got: %q", statusErr)
@@ -438,7 +438,7 @@ func TestCmdSyncStatusExportAndImport(t *testing.T) {
 		t.Fatalf("unexpected status output: %q", statusOut)
 	}
 
-	withArgs(t, "engram", "sync", "--all")
+	withArgs(t, "lore", "sync", "--all")
 	exportOut, exportErr := captureOutput(t, func() { cmdSync(exportCfg) })
 	if exportErr != "" {
 		t.Fatalf("expected no stderr from sync export, got: %q", exportErr)
@@ -447,7 +447,7 @@ func TestCmdSyncStatusExportAndImport(t *testing.T) {
 		t.Fatalf("unexpected sync export output: %q", exportOut)
 	}
 
-	withArgs(t, "engram", "sync", "--import")
+	withArgs(t, "lore", "sync", "--import")
 	importOut, importErr := captureOutput(t, func() { cmdSync(importCfg) })
 	if importErr != "" {
 		t.Fatalf("expected no stderr from sync import, got: %q", importErr)
@@ -456,7 +456,7 @@ func TestCmdSyncStatusExportAndImport(t *testing.T) {
 		t.Fatalf("unexpected sync import output: %q", importOut)
 	}
 
-	withArgs(t, "engram", "sync", "--import")
+	withArgs(t, "lore", "sync", "--import")
 	noopOut, noopErr := captureOutput(t, func() { cmdSync(importCfg) })
 	if noopErr != "" {
 		t.Fatalf("expected no stderr from second sync import, got: %q", noopErr)
@@ -474,7 +474,7 @@ func TestCmdSyncDefaultProjectNoData(t *testing.T) {
 	withCwd(t, workDir)
 
 	cfg := testConfig(t)
-	withArgs(t, "engram", "sync")
+	withArgs(t, "lore", "sync")
 	stdout, stderr := captureOutput(t, func() { cmdSync(cfg) })
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got: %q", stderr)
@@ -499,9 +499,9 @@ func TestMainVersionAndHelpAliases(t *testing.T) {
 		contains  string
 		notStderr bool
 	}{
-		{name: "version", arg: "version", contains: "engram 9.9.9-test", notStderr: true},
-		{name: "version short", arg: "-v", contains: "engram 9.9.9-test", notStderr: true},
-		{name: "version long", arg: "--version", contains: "engram 9.9.9-test", notStderr: true},
+		{name: "version", arg: "version", contains: "lore 9.9.9-test", notStderr: true},
+		{name: "version short", arg: "-v", contains: "lore 9.9.9-test", notStderr: true},
+		{name: "version long", arg: "--version", contains: "lore 9.9.9-test", notStderr: true},
 		{name: "help", arg: "help", contains: "Usage:", notStderr: true},
 		{name: "help short", arg: "-h", contains: "Commands:", notStderr: true},
 		{name: "help long", arg: "--help", contains: "Environment:", notStderr: true},
@@ -509,7 +509,7 @@ func TestMainVersionAndHelpAliases(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			withArgs(t, "engram", tc.arg)
+			withArgs(t, "lore", tc.arg)
 			stdout, stderr := captureOutput(t, func() { main() })
 			if tc.notStderr && stderr != "" {
 				t.Fatalf("expected no stderr, got: %q", stderr)
@@ -531,10 +531,10 @@ func TestMainPrintsUpdateFailuresAndUpdates(t *testing.T) {
 			Status:  versioncheck.StatusCheckFailed,
 			Message: "Could not check for updates: GitHub took too long to respond.",
 		})
-		withArgs(t, "engram", "version")
+		withArgs(t, "lore", "version")
 
 		stdout, stderr := captureOutput(t, func() { main() })
-		if !strings.Contains(stdout, "engram 1.10.7") {
+		if !strings.Contains(stdout, "lore 1.10.7") {
 			t.Fatalf("stdout = %q", stdout)
 		}
 		if !strings.Contains(stderr, "Could not check for updates") {
@@ -547,10 +547,10 @@ func TestMainPrintsUpdateFailuresAndUpdates(t *testing.T) {
 			Status:  versioncheck.StatusUpdateAvailable,
 			Message: "Update available: 1.10.7 -> 1.10.8",
 		})
-		withArgs(t, "engram", "version")
+		withArgs(t, "lore", "version")
 
 		stdout, stderr := captureOutput(t, func() { main() })
-		if !strings.Contains(stdout, "engram 1.10.7") {
+		if !strings.Contains(stdout, "lore 1.10.7") {
 			t.Fatalf("stdout = %q", stdout)
 		}
 		if !strings.Contains(stderr, "Update available") {
@@ -560,10 +560,10 @@ func TestMainPrintsUpdateFailuresAndUpdates(t *testing.T) {
 
 	t.Run("prints nothing when up to date", func(t *testing.T) {
 		stubCheckForUpdates(t, versioncheck.CheckResult{Status: versioncheck.StatusUpToDate})
-		withArgs(t, "engram", "version")
+		withArgs(t, "lore", "version")
 
 		stdout, stderr := captureOutput(t, func() { main() })
-		if !strings.Contains(stdout, "engram 1.10.7") {
+		if !strings.Contains(stdout, "lore 1.10.7") {
 			t.Fatalf("stdout = %q", stdout)
 		}
 		if stderr != "" {
@@ -622,9 +622,9 @@ func TestMainExitHelper(t *testing.T) {
 	case "no-args":
 		os.Args = []string{"engram"}
 	case "unknown":
-		os.Args = []string{"engram", "definitely-unknown-command"}
+		os.Args = []string{"lore", "definitely-unknown-command"}
 	default:
-		os.Args = []string{"engram", "--help"}
+		os.Args = []string{"lore", "--help"}
 	}
 
 	main()
@@ -634,7 +634,7 @@ func TestCmdSearchLocalMode(t *testing.T) {
 	cfg := testConfig(t)
 	mustSeedObservation(t, cfg, "s-local", "proj-local", "note", "local-result", "local content for search", "project")
 
-	withArgs(t, "engram", "search", "local", "--project", "proj-local")
+	withArgs(t, "lore", "search", "local", "--project", "proj-local")
 	stdout, stderr := captureOutput(t, func() { cmdSearch(cfg) })
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got: %q", stderr)
@@ -649,7 +649,7 @@ func TestCmdSearchLocalMode(t *testing.T) {
 func TestCmdProjectsListEmpty(t *testing.T) {
 	cfg := testConfig(t)
 
-	withArgs(t, "engram", "projects", "list")
+	withArgs(t, "lore", "projects", "list")
 	stdout, stderr := captureOutput(t, func() { cmdProjectsList(cfg) })
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got: %q", stderr)
@@ -667,7 +667,7 @@ func TestCmdProjectsList(t *testing.T) {
 	mustSeedObservation(t, cfg, "s-alpha", "alpha", "bugfix", "alpha-bug", "alpha bug", "project")
 	mustSeedObservation(t, cfg, "s-beta", "beta", "decision", "beta-note", "beta content", "project")
 
-	withArgs(t, "engram", "projects", "list")
+	withArgs(t, "lore", "projects", "list")
 	stdout, stderr := captureOutput(t, func() { cmdProjectsList(cfg) })
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got: %q", stderr)
@@ -690,14 +690,14 @@ func TestCmdProjectsRoutesSubcommands(t *testing.T) {
 	cfg := testConfig(t)
 
 	// "list" subcommand
-	withArgs(t, "engram", "projects", "list")
+	withArgs(t, "lore", "projects", "list")
 	stdout, _ := captureOutput(t, func() { cmdProjects(cfg) })
 	if !strings.Contains(stdout, "No projects found") && !strings.Contains(stdout, "Projects") {
 		t.Fatalf("expected projects list output, got: %q", stdout)
 	}
 
 	// default (no subcommand) → list
-	withArgs(t, "engram", "projects")
+	withArgs(t, "lore", "projects")
 	stdout2, _ := captureOutput(t, func() { cmdProjects(cfg) })
 	_ = stdout2 // just checking it doesn't crash
 }
@@ -720,7 +720,7 @@ func TestCmdProjectsConsolidateNoSimilar(t *testing.T) {
 	detectProject = func(string) string { return "unique-project" }
 	t.Cleanup(func() { detectProject = old })
 
-	withArgs(t, "engram", "projects", "consolidate")
+	withArgs(t, "lore", "projects", "consolidate")
 	stdout, stderr := captureOutput(t, func() { cmdProjectsConsolidate(cfg) })
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got: %q", stderr)
@@ -741,7 +741,7 @@ func TestCmdProjectsConsolidateDryRun(t *testing.T) {
 	detectProject = func(string) string { return "engram" }
 	t.Cleanup(func() { detectProject = old })
 
-	withArgs(t, "engram", "projects", "consolidate", "--dry-run")
+	withArgs(t, "lore", "projects", "consolidate", "--dry-run")
 	stdout, stderr := captureOutput(t, func() { cmdProjectsConsolidate(cfg) })
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got: %q", stderr)
@@ -786,7 +786,7 @@ func TestCmdProjectsConsolidateSingleProject(t *testing.T) {
 		return 1, nil
 	}
 
-	withArgs(t, "engram", "projects", "consolidate")
+	withArgs(t, "lore", "projects", "consolidate")
 	stdout, stderr := captureOutput(t, func() { cmdProjectsConsolidate(cfg) })
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got: %q", stderr)
@@ -817,7 +817,7 @@ func TestCmdProjectsConsolidateAllDryRun(t *testing.T) {
 	mustSeedObservation(t, cfg, "s-eng", "engram", "note", "eng note", "content", "project")
 	mustSeedObservation(t, cfg, "s-engm", "engram-memory", "note", "engm note", "content", "project")
 
-	withArgs(t, "engram", "projects", "consolidate", "--all", "--dry-run")
+	withArgs(t, "lore", "projects", "consolidate", "--all", "--dry-run")
 	stdout, stderr := captureOutput(t, func() { cmdProjectsConsolidate(cfg) })
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got: %q", stderr)
@@ -835,7 +835,7 @@ func TestCmdProjectsAllNoGroups(t *testing.T) {
 	mustSeedObservation(t, cfg, "s-bar", "barproject", "note", "bar", "content", "project")
 	mustSeedObservation(t, cfg, "s-qux", "quxproject", "note", "qux", "content", "project")
 
-	withArgs(t, "engram", "projects", "consolidate", "--all")
+	withArgs(t, "lore", "projects", "consolidate", "--all")
 	stdout, stderr := captureOutput(t, func() { cmdProjectsConsolidate(cfg) })
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got: %q", stderr)
@@ -871,7 +871,7 @@ func TestCmdMCPDetectsProjectFromFlag(t *testing.T) {
 		return nil
 	}
 
-	withArgs(t, "engram", "mcp", "--project=myproject")
+	withArgs(t, "lore", "mcp", "--project=myproject")
 	_, _ = captureOutput(t, func() { cmdMCP(cfg) })
 
 	if capturedCfg.DefaultProject != "myproject" {
@@ -882,7 +882,7 @@ func TestCmdMCPDetectsProjectFromFlag(t *testing.T) {
 func TestCmdMCPDetectsProjectFromEnv(t *testing.T) {
 	cfg := testConfig(t)
 
-	t.Setenv("ENGRAM_PROJECT", "env-project")
+	t.Setenv("LORE_PROJECT", "env-project")
 
 	var capturedCfg mcp.MCPConfig
 	oldNew := newMCPServerWithConfig
@@ -898,7 +898,7 @@ func TestCmdMCPDetectsProjectFromEnv(t *testing.T) {
 		return nil
 	}
 
-	withArgs(t, "engram", "mcp")
+	withArgs(t, "lore", "mcp")
 	_, _ = captureOutput(t, func() { cmdMCP(cfg) })
 
 	if capturedCfg.DefaultProject != "env-project" {
@@ -928,7 +928,7 @@ func TestCmdMCPDetectsProjectFromGit(t *testing.T) {
 		return nil
 	}
 
-	withArgs(t, "engram", "mcp")
+	withArgs(t, "lore", "mcp")
 	_, _ = captureOutput(t, func() { cmdMCP(cfg) })
 
 	if capturedCfg.DefaultProject != "detected-from-git" {
@@ -947,7 +947,7 @@ func TestCmdSyncUsesDetectProject(t *testing.T) {
 	t.Cleanup(func() { detectProject = old })
 	detectProject = func(dir string) string { return "git-detected-project" }
 
-	withArgs(t, "engram", "sync")
+	withArgs(t, "lore", "sync")
 	stdout, stderr := captureOutput(t, func() { cmdSync(cfg) })
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got: %q", stderr)
@@ -969,7 +969,7 @@ func TestObsidianExportMissingVault(t *testing.T) {
 	t.Cleanup(func() { exitFunc = oldExit })
 	exitFunc = func(code int) { exitCode = code; panic("exit") }
 
-	withArgs(t, "engram", "obsidian-export", "--project", "eng")
+	withArgs(t, "lore", "obsidian-export", "--project", "eng")
 
 	// Capture stderr before the panic unwinds by closing pipes inside captureOutput.
 	// We use a wrapper that recovers from the exitFunc panic and then still closes
@@ -1024,7 +1024,7 @@ func TestObsidianExportCallsInjectedExporter(t *testing.T) {
 		return obsidian.NewExporter(s, c)
 	}
 
-	withArgs(t, "engram", "obsidian-export",
+	withArgs(t, "lore", "obsidian-export",
 		"--vault", vaultDir,
 		"--project", "eng",
 		"--limit", "50",
@@ -1064,7 +1064,7 @@ func TestObsidianExportMinimalFlags(t *testing.T) {
 		return obsidian.NewExporter(s, c)
 	}
 
-	withArgs(t, "engram", "obsidian-export", "--vault", vaultDir)
+	withArgs(t, "lore", "obsidian-export", "--vault", vaultDir)
 
 	_, _ = captureOutput(t, func() { cmdObsidianExport(cfg) })
 
@@ -1130,7 +1130,7 @@ func TestObsidianExportGraphConfigInvalid(t *testing.T) {
 	cfg := testConfig(t)
 	vaultDir := t.TempDir()
 
-	withArgs(t, "engram", "obsidian-export",
+	withArgs(t, "lore", "obsidian-export",
 		"--vault", vaultDir,
 		"--graph-config", "bananas",
 	)
@@ -1159,7 +1159,7 @@ func TestObsidianExportGraphConfigDefaultsToPreserve(t *testing.T) {
 		return obsidian.NewExporter(s, c)
 	}
 
-	withArgs(t, "engram", "obsidian-export", "--vault", vaultDir)
+	withArgs(t, "lore", "obsidian-export", "--vault", vaultDir)
 
 	_, _ = captureOutput(t, func() { cmdObsidianExport(cfg) })
 
@@ -1185,7 +1185,7 @@ func TestObsidianExportWatchRequiresInterval(t *testing.T) {
 		return nil // nil signals the CLI to skip watcher.Run()
 	}
 
-	withArgs(t, "engram", "obsidian-export", "--vault", vaultDir, "--watch")
+	withArgs(t, "lore", "obsidian-export", "--vault", vaultDir, "--watch")
 
 	// --watch with nil watcher should not panic and should not exit 1
 	var exitCode int
@@ -1216,7 +1216,7 @@ func TestObsidianExportIntervalWithoutWatchErrors(t *testing.T) {
 	cfg := testConfig(t)
 	vaultDir := t.TempDir()
 
-	withArgs(t, "engram", "obsidian-export",
+	withArgs(t, "lore", "obsidian-export",
 		"--vault", vaultDir,
 		"--interval", "5m",
 	)
@@ -1237,7 +1237,7 @@ func TestObsidianExportIntervalBelowMinimumErrors(t *testing.T) {
 	cfg := testConfig(t)
 	vaultDir := t.TempDir()
 
-	withArgs(t, "engram", "obsidian-export",
+	withArgs(t, "lore", "obsidian-export",
 		"--vault", vaultDir,
 		"--watch",
 		"--interval", "30s",
@@ -1259,7 +1259,7 @@ func TestObsidianExportIntervalUnparseableErrors(t *testing.T) {
 	cfg := testConfig(t)
 	vaultDir := t.TempDir()
 
-	withArgs(t, "engram", "obsidian-export",
+	withArgs(t, "lore", "obsidian-export",
 		"--vault", vaultDir,
 		"--watch",
 		"--interval", "banana",
@@ -1292,7 +1292,7 @@ func TestObsidianExportWatchModeCallsInjectedWatcher(t *testing.T) {
 		return nil // nil means Run() is skipped; clean exit
 	}
 
-	withArgs(t, "engram", "obsidian-export",
+	withArgs(t, "lore", "obsidian-export",
 		"--vault", vaultDir,
 		"--watch",
 		"--interval", "2m",

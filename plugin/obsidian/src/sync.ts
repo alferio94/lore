@@ -1,11 +1,11 @@
 import { Notice, Vault } from "obsidian";
-import type EngramBrainPlugin from "./main";
+import type LoreBrainPlugin from "./main";
 
 // ─── API Types ─────────────────────────────────────────────────────────────────
 
 /** A single note entry returned by GET /export */
 interface ExportNote {
-	/** Relative path inside the vault subfolder, e.g. "engram/architecture/my-note-42.md" */
+	/** Relative path inside the vault subfolder, e.g. "lore/architecture/my-note-42.md" */
 	path: string;
 	/** Full markdown content of the note */
 	content: string;
@@ -34,7 +34,7 @@ interface SyncState {
 }
 
 const STATE_VERSION = 1;
-const STATE_FILENAME = ".engram-sync-state.json";
+const STATE_FILENAME = ".lore-sync-state.json";
 
 // ─── Result ───────────────────────────────────────────────────────────────────
 
@@ -49,31 +49,31 @@ export interface SyncResult {
 // ─── Main Sync Function ───────────────────────────────────────────────────────
 
 /**
- * Execute a full or incremental sync against the Engram server.
+ * Execute a full or incremental sync against the Lore server.
  *
  * Steps:
  * 1. Validate settings (URL required)
- * 2. GET {engramUrl}/export?since=T&project=P
- * 3. Read .engram-sync-state.json from vault subfolder
+ * 2. GET {loreUrl}/export?since=T&project=P
+ * 3. Read .lore-sync-state.json from vault subfolder
  * 4. Diff: create new, update changed, delete removed
  * 5. Write updated state file
  * 6. Return SyncResult for status bar + Notice
  *
  * SAFETY: Never touches files outside the configured vault subfolder.
  */
-export async function syncNow(plugin: EngramBrainPlugin): Promise<SyncResult> {
+export async function syncNow(plugin: LoreBrainPlugin): Promise<SyncResult> {
 	const { settings } = plugin;
 	const vault: Vault = plugin.app.vault;
-	const subfolder = settings.vaultSubfolder || "engram";
+	const subfolder = settings.vaultSubfolder || "lore";
 
 	// ── 1. Validate ──────────────────────────────────────────────────────────
-	if (!settings.engramUrl) {
-		new Notice("Engram URL is required");
-		throw new Error("Engram URL is required");
+	if (!settings.loreUrl) {
+		new Notice("Lore URL is required");
+		throw new Error("Lore URL is required");
 	}
 
 	// ── 2. Fetch export from server ──────────────────────────────────────────
-	const exportData = await fetchExport(settings.engramUrl, {
+	const exportData = await fetchExport(settings.loreUrl, {
 		project: settings.projectFilter || undefined,
 		since: settings.lastSyncAt || undefined,
 	});
@@ -98,7 +98,7 @@ export async function syncNow(plugin: EngramBrainPlugin): Promise<SyncResult> {
 		// SAFETY: guard — path must stay inside subfolder
 		const safePath = toSafePath(subfolder, note.path);
 		if (!safePath) {
-			console.warn(`[Engram] Skipping unsafe path: ${note.path}`);
+			console.warn(`[Lore] Skipping unsafe path: ${note.path}`);
 			result.skipped++;
 			continue;
 		}
@@ -167,7 +167,7 @@ async function fetchExport(
 			signal: AbortSignal.timeout(30_000),
 		});
 	} catch (err) {
-		throw new Error("Sync failed: could not reach engram server");
+		throw new Error("Sync failed: could not reach lore server");
 	}
 
 	if (!res.ok) {

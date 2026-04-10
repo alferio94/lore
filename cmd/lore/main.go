@@ -1,13 +1,13 @@
-// Engram — Persistent memory for AI coding agents.
+// Lore — Persistent memory for AI coding agents.
 //
 // Usage:
 //
-//	engram serve          Start HTTP + MCP server
-//	engram mcp            Start MCP server only (stdio transport)
-//	engram search <query> Search memories from CLI
-//	engram save           Save a memory from CLI
-//	engram context        Show recent context
-//	engram stats          Show memory stats
+//	lore serve          Start HTTP + MCP server
+//	lore mcp            Start MCP server only (stdio transport)
+//	lore search <query> Search memories from CLI
+//	lore save           Save a memory from CLI
+//	lore context        Show recent context
+//	lore stats          Show memory stats
 package main
 
 import (
@@ -26,15 +26,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Gentleman-Programming/engram/internal/mcp"
-	"github.com/Gentleman-Programming/engram/internal/obsidian"
-	"github.com/Gentleman-Programming/engram/internal/project"
-	"github.com/Gentleman-Programming/engram/internal/server"
-	"github.com/Gentleman-Programming/engram/internal/setup"
-	"github.com/Gentleman-Programming/engram/internal/store"
-	engramsync "github.com/Gentleman-Programming/engram/internal/sync"
-	"github.com/Gentleman-Programming/engram/internal/tui"
-	versioncheck "github.com/Gentleman-Programming/engram/internal/version"
+	"github.com/alferio94/lore/internal/mcp"
+	"github.com/alferio94/lore/internal/obsidian"
+	"github.com/alferio94/lore/internal/project"
+	"github.com/alferio94/lore/internal/server"
+	"github.com/alferio94/lore/internal/setup"
+	"github.com/alferio94/lore/internal/store"
+	engramsync "github.com/alferio94/lore/internal/sync"
+	"github.com/alferio94/lore/internal/tui"
+	versioncheck "github.com/alferio94/lore/internal/version"
 
 	tea "github.com/charmbracelet/bubbletea"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -128,15 +128,15 @@ func main() {
 		// that os.UserHomeDir() might have missed (e.g. MCP subprocesses on
 		// Windows where %USERPROFILE% is not propagated).
 		if home := resolveHomeFallback(); home != "" {
-			log.Printf("[engram] UserHomeDir failed, using fallback: %s", home)
-			cfg = store.FallbackConfig(filepath.Join(home, ".engram"))
+			log.Printf("[lore] UserHomeDir failed, using fallback: %s", home)
+			cfg = store.FallbackConfig(filepath.Join(home, ".lore"))
 		} else {
 			fatal(cfgErr)
 		}
 	}
 
 	// Allow overriding data dir via env
-	if dir := os.Getenv("ENGRAM_DATA_DIR"); dir != "" {
+	if dir := os.Getenv("LORE_DATA_DIR"); dir != "" {
 		cfg.DataDir = dir
 	}
 
@@ -174,7 +174,7 @@ func main() {
 	case "setup":
 		cmdSetup()
 	case "version", "--version", "-v":
-		fmt.Printf("engram %s\n", version)
+		fmt.Printf("lore %s\n", version)
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -188,12 +188,12 @@ func main() {
 
 func cmdServe(cfg store.Config) {
 	port := 7437 // "ENGR" on phone keypad vibes
-	if p := os.Getenv("ENGRAM_PORT"); p != "" {
+	if p := os.Getenv("LORE_PORT"); p != "" {
 		if n, err := strconv.Atoi(p); err == nil {
 			port = n
 		}
 	}
-	// Allow: engram serve 8080
+	// Allow: lore serve 8080
 	if len(os.Args) > 2 {
 		if n, err := strconv.Atoi(os.Args[2]); err == nil {
 			port = n
@@ -213,7 +213,7 @@ func cmdServe(cfg store.Config) {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		log.Println("[engram] shutting down...")
+		log.Println("[lore] shutting down...")
 		exitFunc(0)
 	}()
 
@@ -243,7 +243,7 @@ func cmdMCP(cfg store.Config) {
 	// Project detection chain: --project flag → ENGRAM_PROJECT env → git detection
 	detectedProject := projectOverride
 	if detectedProject == "" {
-		detectedProject = os.Getenv("ENGRAM_PROJECT")
+		detectedProject = os.Getenv("LORE_PROJECT")
 	}
 	if detectedProject == "" {
 		if cwd, err := os.Getwd(); err == nil {
@@ -287,7 +287,7 @@ func cmdTUI(cfg store.Config) {
 
 func cmdSearch(cfg store.Config) {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: engram search <query> [--type TYPE] [--project PROJECT] [--scope SCOPE] [--limit N]")
+		fmt.Fprintln(os.Stderr, "usage: lore search <query> [--type TYPE] [--project PROJECT] [--scope SCOPE] [--limit N]")
 		exitFunc(1)
 	}
 
@@ -363,7 +363,7 @@ func cmdSearch(cfg store.Config) {
 
 func cmdSave(cfg store.Config) {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: engram save <title> <content> [--type TYPE] [--project PROJECT] [--scope SCOPE] [--topic TOPIC_KEY]")
+		fmt.Fprintln(os.Stderr, "usage: lore save <title> <content> [--type TYPE] [--project PROJECT] [--scope SCOPE] [--topic TOPIC_KEY]")
 		exitFunc(1)
 	}
 
@@ -428,7 +428,7 @@ func cmdSave(cfg store.Config) {
 
 func cmdTimeline(cfg store.Config) {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: engram timeline <observation_id> [--before N] [--after N]")
+		fmt.Fprintln(os.Stderr, "usage: lore timeline <observation_id> [--before N] [--after N]")
 		exitFunc(1)
 	}
 
@@ -556,16 +556,16 @@ func cmdStats(cfg store.Config) {
 		projects = strings.Join(stats.Projects, ", ")
 	}
 
-	fmt.Printf("Engram Memory Stats\n")
+	fmt.Printf("Lore Memory Stats\n")
 	fmt.Printf("  Sessions:     %d\n", stats.TotalSessions)
 	fmt.Printf("  Observations: %d\n", stats.TotalObservations)
 	fmt.Printf("  Prompts:      %d\n", stats.TotalPrompts)
 	fmt.Printf("  Projects:     %s\n", projects)
-	fmt.Printf("  Database:     %s/engram.db\n", cfg.DataDir)
+	fmt.Printf("  Database:     %s/lore.db\n", cfg.DataDir)
 }
 
 func cmdExport(cfg store.Config) {
-	outFile := "engram-export.json"
+	outFile := "lore-export.json"
 	if len(os.Args) > 2 {
 		outFile = os.Args[2]
 	}
@@ -598,7 +598,7 @@ func cmdExport(cfg store.Config) {
 
 func cmdImport(cfg store.Config) {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: engram import <file.json>")
+		fmt.Fprintln(os.Stderr, "usage: lore import <file.json>")
 		exitFunc(1)
 	}
 
@@ -661,7 +661,7 @@ func cmdSync(cfg store.Config) {
 		}
 	}
 
-	syncDir := ".engram"
+	syncDir := ".lore"
 
 	s, err := storeNew(cfg)
 	if err != nil {
@@ -697,7 +697,7 @@ func cmdSync(cfg store.Config) {
 			return
 		}
 
-		fmt.Printf("Imported %d new chunk(s) from .engram/\n", result.ChunksImported)
+		fmt.Printf("Imported %d new chunk(s) from .lore/\n", result.ChunksImported)
 		fmt.Printf("  Sessions:     %d\n", result.SessionsImported)
 		fmt.Printf("  Observations: %d\n", result.ObservationsImported)
 		fmt.Printf("  Prompts:      %d\n", result.PromptsImported)
@@ -734,7 +734,7 @@ func cmdSync(cfg store.Config) {
 	fmt.Printf("  Prompts:      %d\n", result.PromptsExported)
 	fmt.Println()
 	fmt.Println("Add to git:")
-	fmt.Printf("  git add .engram/ && git commit -m \"sync engram memories\"\n")
+	fmt.Printf("  git add .lore/ && git commit -m \"sync lore memories\"\n")
 }
 
 // storeAdapter wraps *store.Store to satisfy obsidian.StoreReader.
@@ -799,7 +799,7 @@ func cmdObsidianExport(cfg store.Config) {
 				i++
 			}
 		default:
-			fmt.Fprintf(os.Stderr, "engram: unknown flag: %s\n", os.Args[i])
+			fmt.Fprintf(os.Stderr, "lore: unknown flag: %s\n", os.Args[i])
 			exitFunc(1)
 		}
 	}
@@ -890,9 +890,9 @@ func cmdObsidianExport(cfg store.Config) {
 
 		if w != nil {
 			if runErr := w.Run(ctx); runErr != nil {
-				log.Printf("[engram] shutting down watch mode: %v", runErr)
+				log.Printf("[lore] shutting down watch mode: %v", runErr)
 			} else {
-				log.Printf("[engram] shutting down watch mode")
+				log.Printf("[lore] shutting down watch mode")
 			}
 		}
 		exitFunc(0)
@@ -919,7 +919,7 @@ func cmdObsidianExport(cfg store.Config) {
 }
 
 func cmdProjects(cfg store.Config) {
-	// Route: engram projects list | engram projects consolidate [--all] [--dry-run]
+	// Route: lore projects list | lore projects consolidate [--all] [--dry-run]
 	subCmd := "list"
 	if len(os.Args) > 2 {
 		subCmd = os.Args[2]
@@ -933,9 +933,9 @@ func cmdProjects(cfg store.Config) {
 		cmdProjectsList(cfg)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown projects subcommand: %s\n", subCmd)
-		fmt.Fprintln(os.Stderr, "usage: engram projects list")
-		fmt.Fprintln(os.Stderr, "       engram projects consolidate [--all] [--dry-run]")
-		fmt.Fprintln(os.Stderr, "       engram projects prune [--dry-run]")
+		fmt.Fprintln(os.Stderr, "usage: lore projects list")
+		fmt.Fprintln(os.Stderr, "       lore projects consolidate [--all] [--dry-run]")
+		fmt.Fprintln(os.Stderr, "       lore projects prune [--dry-run]")
 		exitFunc(1)
 	}
 }
@@ -1430,7 +1430,7 @@ func cmdProjectsPrune(cfg store.Config) {
 func cmdSetup() {
 	agents := setupSupportedAgents()
 
-	// If agent name given directly: engram setup opencode
+	// If agent name given directly: lore setup opencode
 	if len(os.Args) > 2 && !strings.HasPrefix(os.Args[2], "-") {
 		result, err := setupInstallAgent(os.Args[2])
 		if err != nil {
@@ -1443,7 +1443,7 @@ func cmdSetup() {
 	}
 
 	// Interactive selection
-	fmt.Println("engram setup — Install agent plugin")
+	fmt.Println("lore setup — Install agent plugin")
 	fmt.Println()
 	fmt.Println("Which agent do you want to set up?")
 	fmt.Println()
@@ -1481,10 +1481,10 @@ func printPostInstall(agent string) {
 	case "opencode":
 		fmt.Println("\nNext steps:")
 		fmt.Println("  1. Restart OpenCode — plugin + MCP server are ready")
-		fmt.Println("  2. Run 'engram serve &' for session tracking (HTTP API)")
+		fmt.Println("  2. Run 'lore serve &' for session tracking (HTTP API)")
 	case "claude-code":
-		// Offer to add engram tools to the permissions allowlist
-		fmt.Print("\nAdd engram tools to ~/.claude/settings.json allowlist?\n")
+		// Offer to add lore tools to the permissions allowlist
+		fmt.Print("\nAdd lore tools to ~/.claude/settings.json allowlist?\n")
 		fmt.Print("This prevents Claude Code from asking permission on every tool call.\n")
 		fmt.Print("Add to allowlist? (y/N): ")
 		var answer string
@@ -1495,7 +1495,7 @@ func printPostInstall(agent string) {
 				fmt.Fprintf(os.Stderr, "  warning: could not update allowlist: %v\n", err)
 				fmt.Fprintln(os.Stderr, "  You can add them manually to permissions.allow in ~/.claude/settings.json")
 			} else {
-				fmt.Println("  ✓ Engram tools added to allowlist")
+				fmt.Println("  ✓ Lore tools added to allowlist")
 			}
 		} else {
 			fmt.Println("  Skipped. You can add them later to permissions.allow in ~/.claude/settings.json")
@@ -1504,17 +1504,17 @@ func printPostInstall(agent string) {
 		fmt.Println("\nNext steps:")
 		fmt.Println("  1. Restart Claude Code — the plugin is active immediately")
 		fmt.Println("  2. Verify with: claude plugin list")
-		fmt.Println("  3. MCP config written to ~/.claude/mcp/engram.json using absolute binary path")
-		fmt.Println("     (survives plugin auto-updates; re-run 'engram setup claude-code' if you move the binary)")
+		fmt.Println("  3. MCP config written to ~/.claude/mcp/lore.json using absolute binary path")
+		fmt.Println("     (survives plugin auto-updates; re-run 'lore setup claude-code' if you move the binary)")
 	case "gemini-cli":
 		fmt.Println("\nNext steps:")
 		fmt.Println("  1. Restart Gemini CLI so MCP config is reloaded")
-		fmt.Println("  2. Verify ~/.gemini/settings.json includes mcpServers.engram")
+		fmt.Println("  2. Verify ~/.gemini/settings.json includes mcpServers.lore")
 		fmt.Println("  3. Verify ~/.gemini/system.md + ~/.gemini/.env exist for compaction recovery")
 	case "codex":
 		fmt.Println("\nNext steps:")
 		fmt.Println("  1. Restart Codex so MCP config is reloaded")
-		fmt.Println("  2. Verify ~/.codex/config.toml has [mcp_servers.engram]")
+		fmt.Println("  2. Verify ~/.codex/config.toml has [mcp_servers.lore]")
 		fmt.Println("  3. Verify model_instructions_file + experimental_compact_prompt_file are set")
 	}
 }
@@ -1522,10 +1522,10 @@ func printPostInstall(agent string) {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func printUsage() {
-	fmt.Printf(`engram v%s — Persistent memory for AI coding agents
+	fmt.Printf(`lore v%s — Persistent memory for AI coding agents
 
 Usage:
-  engram <command> [arguments]
+  lore <command> [arguments]
 
 Commands:
   serve [port]       Start HTTP API server (default: 7437)
@@ -1534,14 +1534,14 @@ Commands:
                        Profiles: agent (11 tools), admin (4 tools), all (default, 15)
                        Combine: --tools=agent,admin or pick individual tools
                        --project  Override detected project name (default: git remote → cwd)
-                       Example: engram mcp --tools=agent
+                       Example: lore mcp --tools=agent
   tui                Launch interactive terminal UI
   search <query>     Search memories [--type TYPE] [--project PROJECT] [--scope SCOPE] [--limit N]
   save <title> <msg> Save a memory  [--type TYPE] [--project PROJECT] [--scope SCOPE]
   timeline <obs_id>  Show chronological context around an observation [--before N] [--after N]
   context [project]  Show recent context from previous sessions
   stats              Show memory system statistics
-  export [file]      Export all memories to JSON (default: engram-export.json)
+  export [file]      Export all memories to JSON (default: lore-export.json)
   import <file>      Import memories from a JSON export file
   projects list      List all projects with observation, session, and prompt counts
   projects consolidate [--all] [--dry-run]
@@ -1549,8 +1549,8 @@ Commands:
                        --all      Scan ALL projects for similar name groups
                        --dry-run  Preview what would be merged (no changes)
   setup [agent]      Install/setup agent integration (opencode, claude-code, gemini-cli, codex)
-  sync               Export new memories as compressed chunk to .engram/
-                       --import   Import new chunks from .engram/ into local DB
+  sync               Export new memories as compressed chunk to .lore/
+                       --import   Import new chunks from .lore/ into local DB
                        --status   Show sync status (local vs remote chunks)
                        --project  Filter export to a specific project
                        --all      Export ALL projects (ignore directory-based filter)
@@ -1568,16 +1568,16 @@ Commands:
   help               Show this help
 
 Environment:
-  ENGRAM_DATA_DIR    Override data directory (default: ~/.engram)
-  ENGRAM_PORT        Override HTTP server port (default: 7437)
-  ENGRAM_PROJECT     Override auto-detected project name for MCP server
+  LORE_DATA_DIR    Override data directory (default: ~/.lore)
+  LORE_PORT        Override HTTP server port (default: 7437)
+  LORE_PROJECT     Override auto-detected project name for MCP server
 
 MCP Configuration (add to your agent's config):
   {
     "mcp": {
-      "engram": {
+      "lore": {
         "type": "stdio",
-        "command": "engram",
+        "command": "lore",
         "args": ["mcp", "--tools=agent"]
       }
     }
@@ -1586,13 +1586,13 @@ MCP Configuration (add to your agent's config):
 }
 
 func fatal(err error) {
-	fmt.Fprintf(os.Stderr, "engram: %s\n", err)
+	fmt.Fprintf(os.Stderr, "lore: %s\n", err)
 	exitFunc(1)
 }
 
 // resolveHomeFallback tries platform-specific environment variables to find
 // a home directory when os.UserHomeDir() fails. This commonly happens on
-// Windows when engram is launched as an MCP subprocess without full env
+// Windows when lore is launched as an MCP subprocess without full env
 // propagation.
 func resolveHomeFallback() string {
 	// Windows: try common env vars that might be set even when
@@ -1618,28 +1618,28 @@ func resolveHomeFallback() string {
 	return ""
 }
 
-// migrateOrphanedDB checks for engram databases that ended up in wrong
+// migrateOrphanedDB checks for lore databases that ended up in wrong
 // locations (e.g. drive root on Windows when UserHomeDir failed silently)
 // and moves them to the correct location if the correct location has no DB.
 func migrateOrphanedDB(correctDir string) {
-	correctDB := filepath.Join(correctDir, "engram.db")
+	correctDB := filepath.Join(correctDir, "lore.db")
 
 	// If the correct DB already exists, nothing to migrate.
 	if _, err := os.Stat(correctDB); err == nil {
 		return
 	}
 
-	// Known wrong locations: relative ".engram" resolved from common roots.
-	// On Windows this typically ends up at C:\.engram or D:\.engram.
+	// Known wrong locations: relative ".lore" resolved from common roots.
+	// On Windows this typically ends up at C:.lore or D:.lore.
 	candidates := []string{
-		filepath.Join(string(filepath.Separator), ".engram", "engram.db"),
+		filepath.Join(string(filepath.Separator), ".lore", "lore.db"),
 	}
 
 	// On Windows, check all drive letter roots.
 	if filepath.Separator == '\\' {
 		for _, drive := range "CDEFGHIJ" {
 			candidates = append(candidates,
-				filepath.Join(string(drive)+":\\", ".engram", "engram.db"),
+				filepath.Join(string(drive)+":\\", ".lore", "lore.db"),
 			)
 		}
 	}
@@ -1654,10 +1654,10 @@ func migrateOrphanedDB(correctDir string) {
 		}
 
 		// Found an orphaned DB — migrate it.
-		log.Printf("[engram] found orphaned database at %s, migrating to %s", candidate, correctDB)
+		log.Printf("[lore] found orphaned database at %s, migrating to %s", candidate, correctDB)
 
 		if err := os.MkdirAll(correctDir, 0755); err != nil {
-			log.Printf("[engram] migration failed (create dir): %v", err)
+			log.Printf("[lore] migration failed (create dir): %v", err)
 			return
 		}
 
@@ -1669,7 +1669,7 @@ func migrateOrphanedDB(correctDir string) {
 				continue
 			}
 			if renameErr := os.Rename(src, dst); renameErr != nil {
-				log.Printf("[engram] migration failed (move %s): %v", filepath.Base(src), renameErr)
+				log.Printf("[lore] migration failed (move %s): %v", filepath.Base(src), renameErr)
 				return
 			}
 		}
@@ -1681,7 +1681,7 @@ func migrateOrphanedDB(correctDir string) {
 			os.Remove(orphanDir)
 		}
 
-		log.Printf("[engram] migration complete — memories recovered")
+		log.Printf("[lore] migration complete — memories recovered")
 		return
 	}
 }

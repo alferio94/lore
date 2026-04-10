@@ -1,4 +1,4 @@
-# AI Contribution Skills (Engram)
+# AI Contribution Skills (Lore)
 
 - branch-pr: clean branch and PR workflow.
 - testing-coverage: strict TDD and coverage discipline.

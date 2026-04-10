@@ -1,7 +1,7 @@
 ---
-name: engram-branch-pr
+name: lore-branch-pr
 description: >
-  PR creation workflow for Engram following the issue-first enforcement system.
+  PR creation workflow for Lore following the issue-first enforcement system.
   Trigger: When creating a pull request, opening a PR, or preparing changes for review.
 license: Apache-2.0
 metadata:

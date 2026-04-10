@@ -1,4 +1,4 @@
-// Package version checks for newer engram releases on GitHub.
+// Package version checks for newer lore releases on GitHub.
 package version
 
 import (
@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	repoOwner = "Gentleman-Programming"
-	repoName  = "engram"
+	repoOwner = "alferio94"
+	repoName  = "lore"
 )
 
 var (
@@ -150,11 +150,11 @@ func splitVersion(v string) [3]int {
 func updateInstructions() string {
 	switch runtime.GOOS {
 	case "darwin":
-		return "  brew update && brew upgrade engram"
+		return "  brew update && brew upgrade lore"
 	case "linux":
-		return "  brew update && brew upgrade engram\n  or: go install github.com/Gentleman-Programming/engram/cmd/engram@latest"
+		return "  brew update && brew upgrade lore\n  or: go install github.com/alferio94/lore/cmd/lore@latest"
 	default:
-		return "  go install github.com/Gentleman-Programming/engram/cmd/engram@latest\n  or: https://github.com/Gentleman-Programming/engram/releases/latest"
+		return "  go install github.com/alferio94/lore/cmd/lore@latest\n  or: https://github.com/alferio94/lore/releases/latest"
 	}
 }
 

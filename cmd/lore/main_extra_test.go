@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Gentleman-Programming/engram/internal/mcp"
-	engramsrv "github.com/Gentleman-Programming/engram/internal/server"
-	"github.com/Gentleman-Programming/engram/internal/setup"
-	"github.com/Gentleman-Programming/engram/internal/store"
-	engramsync "github.com/Gentleman-Programming/engram/internal/sync"
-	"github.com/Gentleman-Programming/engram/internal/tui"
-	versioncheck "github.com/Gentleman-Programming/engram/internal/version"
+	"github.com/alferio94/lore/internal/mcp"
+	engramsrv "github.com/alferio94/lore/internal/server"
+	"github.com/alferio94/lore/internal/setup"
+	"github.com/alferio94/lore/internal/store"
+	engramsync "github.com/alferio94/lore/internal/sync"
+	"github.com/alferio94/lore/internal/tui"
+	versioncheck "github.com/alferio94/lore/internal/version"
 
 	tea "github.com/charmbracelet/bubbletea"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -179,7 +179,7 @@ func TestFatal(t *testing.T) {
 	if !ok || int(code) != 1 {
 		t.Fatalf("expected exit code 1 panic, got %v", recovered)
 	}
-	if !strings.Contains(stderr, "engram: boom") {
+	if !strings.Contains(stderr, "lore: boom") {
 		t.Fatalf("fatal stderr mismatch: %q", stderr)
 	}
 }
@@ -208,12 +208,12 @@ func TestCmdServeParsesPortAndErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stubExitWithPanic(t)
 			if tc.envPort != "" {
-				t.Setenv("ENGRAM_PORT", tc.envPort)
+				t.Setenv("LORE_PORT", tc.envPort)
 			} else {
-				t.Setenv("ENGRAM_PORT", "")
+				t.Setenv("LORE_PORT", "")
 			}
 
-			args := []string{"engram", "serve"}
+			args := []string{"lore", "serve"}
 			if tc.argPort != "" {
 				args = append(args, tc.argPort)
 			}
@@ -290,7 +290,7 @@ func TestCmdSetupDirectAndInteractive(t *testing.T) {
 		return &setup.Result{Agent: agent, Destination: "/tmp/dest", Files: 2}, nil
 	}
 
-	withArgs(t, "engram", "setup", "codex")
+	withArgs(t, "lore", "setup", "codex")
 	out, errOut, recovered := captureOutputAndRecover(t, func() { cmdSetup() })
 	if recovered != nil || errOut != "" {
 		t.Fatalf("direct setup should succeed, panic=%v stderr=%q", recovered, errOut)
@@ -299,7 +299,7 @@ func TestCmdSetupDirectAndInteractive(t *testing.T) {
 		t.Fatalf("unexpected direct setup output: %q", out)
 	}
 
-	withArgs(t, "engram", "setup", "broken")
+	withArgs(t, "lore", "setup", "broken")
 	_, errOut, recovered = captureOutputAndRecover(t, func() { cmdSetup() })
 	if _, ok := recovered.(exitCode); !ok || !strings.Contains(errOut, "install failed") {
 		t.Fatalf("expected direct setup fatal, panic=%v stderr=%q", recovered, errOut)
@@ -314,7 +314,7 @@ func TestCmdSetupDirectAndInteractive(t *testing.T) {
 		return 1, nil
 	}
 
-	withArgs(t, "engram", "setup")
+	withArgs(t, "lore", "setup")
 	out, errOut, recovered = captureOutputAndRecover(t, func() { cmdSetup() })
 	if recovered != nil || errOut != "" {
 		t.Fatalf("interactive setup should succeed, panic=%v stderr=%q", recovered, errOut)
@@ -328,7 +328,7 @@ func TestCmdSetupDirectAndInteractive(t *testing.T) {
 		*p = "99"
 		return 1, nil
 	}
-	withArgs(t, "engram", "setup")
+	withArgs(t, "lore", "setup")
 	_, errOut, recovered = captureOutputAndRecover(t, func() { cmdSetup() })
 	if _, ok := recovered.(exitCode); !ok || !strings.Contains(errOut, "Invalid choice") {
 		t.Fatalf("expected invalid choice exit, panic=%v stderr=%q", recovered, errOut)
@@ -344,32 +344,32 @@ func TestCmdExportDefaultAndCmdImportErrors(t *testing.T) {
 
 	mustSeedObservation(t, cfg, "s-exp-default", "proj", "note", "title", "content", "project")
 
-	withArgs(t, "engram", "export")
+	withArgs(t, "lore", "export")
 	stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdExport(cfg) })
 	if recovered != nil || stderr != "" {
 		t.Fatalf("export default should succeed, panic=%v stderr=%q", recovered, stderr)
 	}
-	if !strings.Contains(stdout, "Exported to engram-export.json") {
+	if !strings.Contains(stdout, "Exported to lore-export.json") {
 		t.Fatalf("unexpected default export output: %q", stdout)
 	}
-	if _, err := os.Stat(filepath.Join(workDir, "engram-export.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(workDir, "lore-export.json")); err != nil {
 		t.Fatalf("expected default export file: %v", err)
 	}
 
 	badPath := filepath.Join(workDir, "missing", "out.json")
-	withArgs(t, "engram", "export", badPath)
+	withArgs(t, "lore", "export", badPath)
 	_, stderr, recovered = captureOutputAndRecover(t, func() { cmdExport(cfg) })
 	if _, ok := recovered.(exitCode); !ok || !strings.Contains(stderr, "no such file or directory") {
 		t.Fatalf("expected export write fatal, panic=%v stderr=%q", recovered, stderr)
 	}
 
-	withArgs(t, "engram", "import")
+	withArgs(t, "lore", "import")
 	_, stderr, recovered = captureOutputAndRecover(t, func() { cmdImport(cfg) })
-	if _, ok := recovered.(exitCode); !ok || !strings.Contains(stderr, "usage: engram import") {
+	if _, ok := recovered.(exitCode); !ok || !strings.Contains(stderr, "usage: lore import") {
 		t.Fatalf("expected import usage exit, panic=%v stderr=%q", recovered, stderr)
 	}
 
-	withArgs(t, "engram", "import", filepath.Join(workDir, "nope.json"))
+	withArgs(t, "lore", "import", filepath.Join(workDir, "nope.json"))
 	_, stderr, recovered = captureOutputAndRecover(t, func() { cmdImport(cfg) })
 	if _, ok := recovered.(exitCode); !ok || !strings.Contains(stderr, "read") {
 		t.Fatalf("expected import read fatal, panic=%v stderr=%q", recovered, stderr)
@@ -379,7 +379,7 @@ func TestCmdExportDefaultAndCmdImportErrors(t *testing.T) {
 	if err := os.WriteFile(invalidJSON, []byte("{invalid"), 0644); err != nil {
 		t.Fatalf("write invalid json: %v", err)
 	}
-	withArgs(t, "engram", "import", invalidJSON)
+	withArgs(t, "lore", "import", invalidJSON)
 	_, stderr, recovered = captureOutputAndRecover(t, func() { cmdImport(cfg) })
 	if _, ok := recovered.(exitCode); !ok || !strings.Contains(stderr, "parse") {
 		t.Fatalf("expected import parse fatal, panic=%v stderr=%q", recovered, stderr)
@@ -390,19 +390,19 @@ func TestMainDispatchServeMCPAndTUI(t *testing.T) {
 	stubRuntimeHooks(t)
 
 	t.Setenv("ENGRAM_DATA_DIR", t.TempDir())
-	withArgs(t, "engram", "serve", "8088")
+	withArgs(t, "lore", "serve", "8088")
 	_, stderr, recovered := captureOutputAndRecover(t, func() { main() })
 	if recovered != nil || stderr != "" {
 		t.Fatalf("serve dispatch failed: panic=%v stderr=%q", recovered, stderr)
 	}
 
-	withArgs(t, "engram", "mcp")
+	withArgs(t, "lore", "mcp")
 	_, stderr, recovered = captureOutputAndRecover(t, func() { main() })
 	if recovered != nil || stderr != "" {
 		t.Fatalf("mcp dispatch failed: panic=%v stderr=%q", recovered, stderr)
 	}
 
-	withArgs(t, "engram", "tui")
+	withArgs(t, "lore", "tui")
 	_, stderr, recovered = captureOutputAndRecover(t, func() { main() })
 	if recovered != nil || stderr != "" {
 		t.Fatalf("tui dispatch failed: panic=%v stderr=%q", recovered, stderr)
@@ -437,17 +437,17 @@ func TestStoreInitFailurePaths(t *testing.T) {
 	}
 
 	argsByCmd := [][]string{
-		{"engram", "serve"},
-		{"engram", "mcp"},
-		{"engram", "tui"},
-		{"engram", "search", "q"},
-		{"engram", "save", "t", "c"},
-		{"engram", "timeline", "1"},
-		{"engram", "context"},
-		{"engram", "stats"},
-		{"engram", "export"},
-		{"engram", "import", importFile},
-		{"engram", "sync"},
+		{"lore", "serve"},
+		{"lore", "mcp"},
+		{"lore", "tui"},
+		{"lore", "search", "q"},
+		{"lore", "save", "t", "c"},
+		{"lore", "timeline", "1"},
+		{"lore", "context"},
+		{"lore", "stats"},
+		{"lore", "export"},
+		{"lore", "import", importFile},
+		{"lore", "sync"},
 	}
 
 	for i, fn := range cmds {
@@ -473,11 +473,11 @@ func TestUsageAndValidationExits(t *testing.T) {
 		errSubstr  string
 		stderrOnly bool
 	}{
-		{name: "search usage", args: []string{"engram", "search"}, run: cmdSearch, errSubstr: "usage: engram search"},
-		{name: "search missing query", args: []string{"engram", "search", "--limit", "3"}, run: cmdSearch, errSubstr: "search query is required"},
-		{name: "save usage", args: []string{"engram", "save", "title"}, run: cmdSave, errSubstr: "usage: engram save"},
-		{name: "timeline usage", args: []string{"engram", "timeline"}, run: cmdTimeline, errSubstr: "usage: engram timeline"},
-		{name: "timeline invalid id", args: []string{"engram", "timeline", "abc"}, run: cmdTimeline, errSubstr: "invalid observation id"},
+		{name: "search usage", args: []string{"lore", "search"}, run: cmdSearch, errSubstr: "usage: lore search"},
+		{name: "search missing query", args: []string{"lore", "search", "--limit", "3"}, run: cmdSearch, errSubstr: "search query is required"},
+		{name: "save usage", args: []string{"lore", "save", "title"}, run: cmdSave, errSubstr: "usage: lore save"},
+		{name: "timeline usage", args: []string{"lore", "timeline"}, run: cmdTimeline, errSubstr: "usage: lore timeline"},
+		{name: "timeline invalid id", args: []string{"lore", "timeline", "abc"}, run: cmdTimeline, errSubstr: "invalid observation id"},
 	}
 
 	for _, tc := range tests {
@@ -522,15 +522,15 @@ func TestMainDispatchRemainingCommands(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "search", args: []string{"engram", "search", "focus"}},
-		{name: "save", args: []string{"engram", "save", "t", "c"}},
-		{name: "timeline", args: []string{"engram", "timeline", fmt.Sprintf("%d", focusID)}},
-		{name: "context", args: []string{"engram", "context", "main-proj"}},
-		{name: "stats", args: []string{"engram", "stats"}},
-		{name: "export", args: []string{"engram", "export", filepath.Join(t.TempDir(), "exp.json")}},
-		{name: "import", args: []string{"engram", "import", importFile}},
-		{name: "sync", args: []string{"engram", "sync", "--all"}},
-		{name: "setup", args: []string{"engram", "setup", "codex"}},
+		{name: "search", args: []string{"lore", "search", "focus"}},
+		{name: "save", args: []string{"lore", "save", "t", "c"}},
+		{name: "timeline", args: []string{"lore", "timeline", fmt.Sprintf("%d", focusID)}},
+		{name: "context", args: []string{"lore", "context", "main-proj"}},
+		{name: "stats", args: []string{"lore", "stats"}},
+		{name: "export", args: []string{"lore", "export", filepath.Join(t.TempDir(), "exp.json")}},
+		{name: "import", args: []string{"lore", "import", importFile}},
+		{name: "sync", args: []string{"lore", "sync", "--all"}},
+		{name: "setup", args: []string{"lore", "setup", "codex"}},
 	}
 
 	for _, tc := range tests {
@@ -552,7 +552,7 @@ func TestCmdSyncAdditionalBranches(t *testing.T) {
 		withCwd(t, workDir)
 		cfg := testConfig(t)
 
-		withArgs(t, "engram", "sync", "--all")
+		withArgs(t, "lore", "sync", "--all")
 		stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdSync(cfg) })
 		if recovered != nil || stderr != "" {
 			t.Fatalf("expected clean run, panic=%v stderr=%q", recovered, stderr)
@@ -567,14 +567,14 @@ func TestCmdSyncAdditionalBranches(t *testing.T) {
 		withCwd(t, workDir)
 		cfg := testConfig(t)
 
-		if err := os.MkdirAll(filepath.Join(workDir, ".engram"), 0755); err != nil {
-			t.Fatalf("mkdir .engram: %v", err)
+		if err := os.MkdirAll(filepath.Join(workDir, ".lore"), 0755); err != nil {
+			t.Fatalf("mkdir .lore: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(workDir, ".engram", "manifest.json"), []byte("{bad json"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(workDir, ".lore", "manifest.json"), []byte("{bad json"), 0644); err != nil {
 			t.Fatalf("write manifest: %v", err)
 		}
 
-		withArgs(t, "engram", "sync", "--status")
+		withArgs(t, "lore", "sync", "--status")
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdSync(cfg) })
 		if _, ok := recovered.(exitCode); !ok {
 			t.Fatalf("expected fatal exit, got %v", recovered)
@@ -589,14 +589,14 @@ func TestCmdSyncAdditionalBranches(t *testing.T) {
 		withCwd(t, workDir)
 		cfg := testConfig(t)
 
-		if err := os.MkdirAll(filepath.Join(workDir, ".engram"), 0755); err != nil {
-			t.Fatalf("mkdir .engram: %v", err)
+		if err := os.MkdirAll(filepath.Join(workDir, ".lore"), 0755); err != nil {
+			t.Fatalf("mkdir .lore: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(workDir, ".engram", "manifest.json"), []byte("{bad json"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(workDir, ".lore", "manifest.json"), []byte("{bad json"), 0644); err != nil {
 			t.Fatalf("write manifest: %v", err)
 		}
 
-		withArgs(t, "engram", "sync", "--import")
+		withArgs(t, "lore", "sync", "--import")
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdSync(cfg) })
 		if _, ok := recovered.(exitCode); !ok {
 			t.Fatalf("expected fatal exit, got %v", recovered)
@@ -611,14 +611,14 @@ func TestCmdSyncAdditionalBranches(t *testing.T) {
 		withCwd(t, workDir)
 		cfg := testConfig(t)
 
-		if err := os.MkdirAll(filepath.Join(workDir, ".engram"), 0755); err != nil {
-			t.Fatalf("mkdir .engram: %v", err)
+		if err := os.MkdirAll(filepath.Join(workDir, ".lore"), 0755); err != nil {
+			t.Fatalf("mkdir .lore: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(workDir, ".engram", "manifest.json"), []byte("{bad json"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(workDir, ".lore", "manifest.json"), []byte("{bad json"), 0644); err != nil {
 			t.Fatalf("write manifest: %v", err)
 		}
 
-		withArgs(t, "engram", "sync")
+		withArgs(t, "lore", "sync")
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdSync(cfg) })
 		if _, ok := recovered.(exitCode); !ok {
 			t.Fatalf("expected fatal exit, got %v", recovered)
@@ -645,7 +645,7 @@ func TestCmdImportStoreImportFailure(t *testing.T) {
 		t.Fatalf("write bad import: %v", err)
 	}
 
-	withArgs(t, "engram", "import", badImport)
+	withArgs(t, "lore", "import", badImport)
 	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdImport(cfg) })
 	if _, ok := recovered.(exitCode); !ok {
 		t.Fatalf("expected fatal exit, got %v", recovered)
@@ -658,7 +658,7 @@ func TestCmdImportStoreImportFailure(t *testing.T) {
 func TestCmdSearchAndSaveDanglingFlags(t *testing.T) {
 	cfg := testConfig(t)
 
-	withArgs(t, "engram", "save", "dangling-title", "dangling-content", "--type")
+	withArgs(t, "lore", "save", "dangling-title", "dangling-content", "--type")
 	stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdSave(cfg) })
 	if recovered != nil || stderr != "" {
 		t.Fatalf("save with dangling flag failed, panic=%v stderr=%q", recovered, stderr)
@@ -667,7 +667,7 @@ func TestCmdSearchAndSaveDanglingFlags(t *testing.T) {
 		t.Fatalf("unexpected save output: %q", stdout)
 	}
 
-	withArgs(t, "engram", "search", "dangling-content", "--limit", "not-a-number", "--project")
+	withArgs(t, "lore", "search", "dangling-content", "--limit", "not-a-number", "--project")
 	stdout, stderr, recovered = captureOutputAndRecover(t, func() { cmdSearch(cfg) })
 	if recovered != nil || stderr != "" {
 		t.Fatalf("search with dangling flags failed, panic=%v stderr=%q", recovered, stderr)
@@ -693,7 +693,7 @@ func TestCmdSetupHyphenArgFallsBackToInteractive(t *testing.T) {
 		return 1, nil
 	}
 
-	withArgs(t, "engram", "setup", "--not-an-agent")
+	withArgs(t, "lore", "setup", "--not-an-agent")
 	stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdSetup() })
 	if recovered != nil || stderr != "" {
 		t.Fatalf("setup interactive fallback failed: panic=%v stderr=%q", recovered, stderr)
@@ -707,7 +707,7 @@ func TestCmdTimelineNoBeforeAfterSections(t *testing.T) {
 	cfg := testConfig(t)
 	focusID := mustSeedObservation(t, cfg, "solo-session", "solo", "note", "focus", "only content", "project")
 
-	withArgs(t, "engram", "timeline", fmt.Sprintf("%d", focusID), "--before", "0", "--after", "0")
+	withArgs(t, "lore", "timeline", fmt.Sprintf("%d", focusID), "--before", "0", "--after", "0")
 	stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdTimeline(cfg) })
 	if recovered != nil || stderr != "" {
 		t.Fatalf("timeline failed: panic=%v stderr=%q", recovered, stderr)
@@ -719,7 +719,7 @@ func TestCmdTimelineNoBeforeAfterSections(t *testing.T) {
 
 func TestCmdStatsNoProjectsYet(t *testing.T) {
 	cfg := testConfig(t)
-	withArgs(t, "engram", "stats")
+	withArgs(t, "lore", "stats")
 	stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdStats(cfg) })
 	if recovered != nil || stderr != "" {
 		t.Fatalf("stats failed: panic=%v stderr=%q", recovered, stderr)
@@ -737,14 +737,14 @@ func TestCmdSyncImportEmptyAndMixedChunks(t *testing.T) {
 		withCwd(t, workDir)
 		cfg := testConfig(t)
 
-		if err := os.MkdirAll(filepath.Join(workDir, ".engram"), 0755); err != nil {
-			t.Fatalf("mkdir .engram: %v", err)
+		if err := os.MkdirAll(filepath.Join(workDir, ".lore"), 0755); err != nil {
+			t.Fatalf("mkdir .lore: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(workDir, ".engram", "manifest.json"), []byte(`{"version":1,"chunks":[]}`), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(workDir, ".lore", "manifest.json"), []byte(`{"version":1,"chunks":[]}`), 0644); err != nil {
 			t.Fatalf("write manifest: %v", err)
 		}
 
-		withArgs(t, "engram", "sync", "--import")
+		withArgs(t, "lore", "sync", "--import")
 		stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdSync(cfg) })
 		if recovered != nil || stderr != "" {
 			t.Fatalf("empty import failed: panic=%v stderr=%q", recovered, stderr)
@@ -762,18 +762,18 @@ func TestCmdSyncImportEmptyAndMixedChunks(t *testing.T) {
 		importCfg := testConfig(t)
 
 		mustSeedObservation(t, exportCfg, "mix-1", "mix", "note", "one", "content-one", "project")
-		withArgs(t, "engram", "sync", "--all")
+		withArgs(t, "lore", "sync", "--all")
 		_, _, _ = captureOutputAndRecover(t, func() { cmdSync(exportCfg) })
 
-		withArgs(t, "engram", "sync", "--import")
+		withArgs(t, "lore", "sync", "--import")
 		_, _, _ = captureOutputAndRecover(t, func() { cmdSync(importCfg) })
 
 		time.Sleep(1100 * time.Millisecond)
 		mustSeedObservation(t, exportCfg, "mix-2", "mix", "note", "two", "content-two", "project")
-		withArgs(t, "engram", "sync", "--all")
+		withArgs(t, "lore", "sync", "--all")
 		_, _, _ = captureOutputAndRecover(t, func() { cmdSync(exportCfg) })
 
-		withArgs(t, "engram", "sync", "--import")
+		withArgs(t, "lore", "sync", "--import")
 		stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdSync(importCfg) })
 		if recovered != nil || stderr != "" {
 			t.Fatalf("mixed import failed: panic=%v stderr=%q", recovered, stderr)
@@ -800,7 +800,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 	}
 
 	t.Run("search seam error", func(t *testing.T) {
-		withArgs(t, "engram", "search", "needle")
+		withArgs(t, "lore", "search", "needle")
 		storeSearch = func(*store.Store, string, store.SearchOptions) ([]store.SearchResult, error) {
 			return nil, errors.New("forced search error")
 		}
@@ -809,7 +809,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 	})
 
 	t.Run("save seam error", func(t *testing.T) {
-		withArgs(t, "engram", "save", "title", "content")
+		withArgs(t, "lore", "save", "title", "content")
 		storeAddObservation = func(*store.Store, store.AddObservationParams) (int64, error) {
 			return 0, errors.New("forced save error")
 		}
@@ -818,7 +818,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 	})
 
 	t.Run("timeline seam error", func(t *testing.T) {
-		withArgs(t, "engram", "timeline", "1")
+		withArgs(t, "lore", "timeline", "1")
 		storeTimeline = func(*store.Store, int64, int, int) (*store.TimelineResult, error) {
 			return nil, errors.New("forced timeline error")
 		}
@@ -828,7 +828,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 
 	t.Run("timeline prints session summary", func(t *testing.T) {
 		summary := "this session has a non-empty summary"
-		withArgs(t, "engram", "timeline", "1")
+		withArgs(t, "lore", "timeline", "1")
 		storeTimeline = func(*store.Store, int64, int, int) (*store.TimelineResult, error) {
 			return &store.TimelineResult{
 				Focus:        store.Observation{ID: 1, Type: "note", Title: "focus", Content: "content", CreatedAt: "2026-01-01"},
@@ -846,7 +846,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 	})
 
 	t.Run("context seam error", func(t *testing.T) {
-		withArgs(t, "engram", "context")
+		withArgs(t, "lore", "context")
 		storeFormatContext = func(*store.Store, string, string) (string, error) {
 			return "", errors.New("forced context error")
 		}
@@ -855,7 +855,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 	})
 
 	t.Run("stats seam error", func(t *testing.T) {
-		withArgs(t, "engram", "stats")
+		withArgs(t, "lore", "stats")
 		storeStats = func(*store.Store) (*store.Stats, error) {
 			return nil, errors.New("forced stats error")
 		}
@@ -864,7 +864,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 	})
 
 	t.Run("export seam error", func(t *testing.T) {
-		withArgs(t, "engram", "export")
+		withArgs(t, "lore", "export")
 		storeExport = func(*store.Store) (*store.ExportData, error) {
 			return nil, errors.New("forced export error")
 		}
@@ -873,7 +873,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 	})
 
 	t.Run("export marshal seam error", func(t *testing.T) {
-		withArgs(t, "engram", "export")
+		withArgs(t, "lore", "export")
 		storeExport = func(s *store.Store) (*store.ExportData, error) { return s.Export() }
 		jsonMarshalIndent = func(any, string, string) ([]byte, error) {
 			return nil, errors.New("forced marshal error")
@@ -884,7 +884,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 
 	t.Run("sync seam status error", func(t *testing.T) {
 		withCwd(t, t.TempDir())
-		withArgs(t, "engram", "sync", "--status")
+		withArgs(t, "lore", "sync", "--status")
 		syncStatus = func(*engramsync.Syncer) (int, int, int, error) {
 			return 0, 0, 0, errors.New("forced status error")
 		}
@@ -894,7 +894,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 
 	t.Run("sync uses explicit project flag", func(t *testing.T) {
 		withCwd(t, t.TempDir())
-		withArgs(t, "engram", "sync", "--project", "explicit-proj")
+		withArgs(t, "lore", "sync", "--project", "explicit-proj")
 		stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdSync(cfg) })
 		if recovered != nil || stderr != "" {
 			t.Fatalf("sync with --project should succeed, panic=%v stderr=%q", recovered, stderr)
@@ -917,7 +917,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 			return nil, errors.New("forced setup error")
 		}
 
-		withArgs(t, "engram", "setup")
+		withArgs(t, "lore", "setup")
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdSetup() })
 		assertFatal(t, stderr, recovered, "forced setup error")
 	})
@@ -948,7 +948,7 @@ func TestCmdMCP(t *testing.T) {
 			}
 			return mcpserver.NewMCPServer("test", "0")
 		}
-		withArgs(t, "engram", "mcp")
+		withArgs(t, "lore", "mcp")
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdMCP(cfg) })
 		if recovered != nil || stderr != "" {
 			t.Fatalf("expected clean run, got panic=%v stderr=%q", recovered, stderr)
@@ -964,7 +964,7 @@ func TestCmdMCP(t *testing.T) {
 			gotAllowlist = allowlist
 			return mcpserver.NewMCPServer("test", "0")
 		}
-		withArgs(t, "engram", "mcp", "--tools=agent")
+		withArgs(t, "lore", "mcp", "--tools=agent")
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdMCP(cfg) })
 		if recovered != nil || stderr != "" {
 			t.Fatalf("expected clean run, got panic=%v stderr=%q", recovered, stderr)
@@ -980,7 +980,7 @@ func TestCmdMCP(t *testing.T) {
 			gotAllowlist = allowlist
 			return mcpserver.NewMCPServer("test", "0")
 		}
-		withArgs(t, "engram", "mcp", "--tools", "agent")
+		withArgs(t, "lore", "mcp", "--tools", "agent")
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdMCP(cfg) })
 		if recovered != nil || stderr != "" {
 			t.Fatalf("expected clean run, got panic=%v stderr=%q", recovered, stderr)
@@ -994,7 +994,7 @@ func TestCmdMCP(t *testing.T) {
 		storeNew = func(cfg store.Config) (*store.Store, error) {
 			return nil, errors.New("db open failed")
 		}
-		withArgs(t, "engram", "mcp")
+		withArgs(t, "lore", "mcp")
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdMCP(cfg) })
 		assertFatal(t, stderr, recovered, "db open failed")
 	})
@@ -1004,7 +1004,7 @@ func TestCmdMCP(t *testing.T) {
 		serveMCP = func(_ *mcpserver.MCPServer, _ ...mcpserver.StdioOption) error {
 			return errors.New("stdio failed")
 		}
-		withArgs(t, "engram", "mcp")
+		withArgs(t, "lore", "mcp")
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdMCP(cfg) })
 		assertFatal(t, stderr, recovered, "stdio failed")
 	})

@@ -1,7 +1,7 @@
 ---
-name: engram-issue-creation
+name: lore-issue-creation
 description: >
-  Issue creation workflow for Engram following the issue-first enforcement system.
+  Issue creation workflow for Lore following the issue-first enforcement system.
   Trigger: When creating a GitHub issue, reporting a bug, or requesting a feature.
 license: Apache-2.0
 metadata:
@@ -23,7 +23,7 @@ Use this skill when:
 1. **Blank issues are disabled** — MUST use a template (bug report or feature request)
 2. **Every issue gets `status:needs-review` automatically** on creation
 3. **A maintainer MUST add `status:approved`** before any PR can be opened
-4. **Questions go to [Discussions](https://github.com/Gentleman-Programming/engram/discussions)**, not issues
+4. **Questions go to [Discussions](https://github.com/Gentleman-Programming/lore/discussions)**, not issues
 
 ---
 
@@ -58,7 +58,7 @@ Auto-labels: `bug`, `status:needs-review`
 | **Expected Behavior** | What should have happened |
 | **Actual Behavior** | What happened instead (include errors/logs) |
 | **Operating System** | Dropdown: macOS, Linux variants, Windows, WSL |
-| **Engram Version** | Output of `engram version` |
+| **Lore Version** | Output of `lore version` |
 | **Agent / Client** | Dropdown: Claude Code, OpenCode, Gemini CLI, Cursor, Windsurf, Other |
 
 #### Optional Fields
@@ -82,7 +82,7 @@ gh issue create --template "bug_report.yml" \
 When two agents save observations concurrently, duplicates are created.
 
 ### Steps to Reproduce
-1. Start two engram instances pointing to the same DB
+1. Start two lore instances pointing to the same DB
 2. Both save an observation with the same title simultaneously
 3. Query observations — duplicates appear
 
@@ -95,7 +95,7 @@ Two identical observations exist with different IDs.
 ### Operating System
 macOS
 
-### Engram Version
+### Lore Version
 0.3.1
 
 ### Agent / Client
@@ -142,14 +142,14 @@ gh issue create --template "feature_request.yml" \
 - [x] I understand this issue needs status:approved before a PR can be opened
 
 ### Problem Description
-When scripting with engram, parsing the human-readable output of mem search is fragile. There's no machine-readable output format.
+When scripting with lore, parsing the human-readable output of mem search is fragile. There's no machine-readable output format.
 
 ### Proposed Solution
-Add a \`--json\` flag to \`engram mem search\` that outputs results as JSON.
+Add a \`--json\` flag to \`lore mem search\` that outputs results as JSON.
 
 Example:
 \`\`\`bash
-engram mem search \"auth middleware\" --json
+lore mem search \"auth middleware\" --json
 \`\`\`
 
 Expected output:

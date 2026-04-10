@@ -1,11 +1,11 @@
 /**
- * Engram — OpenCode plugin adapter
+ * Lore — OpenCode plugin adapter
  *
- * Thin layer that connects OpenCode's event system to the Engram Go binary.
+ * Thin layer that connects OpenCode's event system to the Lore Go binary.
  * The Go binary runs as a local HTTP server and handles all persistence.
  *
  * Flow:
- *   OpenCode events → this plugin → HTTP calls → engram serve → SQLite
+ *   OpenCode events → this plugin → HTTP calls → lore serve → SQLite
  *
  * Session resilience:
  *   Uses `ensureSession()` before any DB write. This means sessions are
@@ -18,31 +18,31 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
-const ENGRAM_PORT = parseInt(process.env.ENGRAM_PORT ?? "7437")
-const ENGRAM_URL = `http://127.0.0.1:${ENGRAM_PORT}`
-const ENGRAM_BIN = process.env.ENGRAM_BIN ?? "engram"
+const LORE_PORT = parseInt(process.env.LORE_PORT ?? "7437")
+const LORE_URL = `http://127.0.0.1:${LORE_PORT}`
+const LORE_BIN = process.env.LORE_BIN ?? "lore"
 
 // Engram's own MCP tools — don't count these as "tool calls" for session stats
-const ENGRAM_TOOLS = new Set([
-  "mem_search",
-  "mem_save",
-  "mem_update",
-  "mem_delete",
-  "mem_suggest_topic_key",
-  "mem_save_prompt",
-  "mem_session_summary",
-  "mem_context",
-  "mem_stats",
-  "mem_timeline",
-  "mem_get_observation",
-  "mem_session_start",
-  "mem_session_end",
+const LORE_TOOLS = new Set([
+  "lore_search",
+  "lore_save",
+  "lore_update",
+  "lore_delete",
+  "lore_suggest_topic_key",
+  "lore_save_prompt",
+  "lore_session_summary",
+  "lore_context",
+  "lore_stats",
+  "lore_timeline",
+  "lore_get_observation",
+  "lore_session_start",
+  "lore_session_end",
 ])
 
 // ─── Memory Instructions ─────────────────────────────────────────────────────
 // These get injected into the agent's context so it knows to call mem_save.
 
-const MEMORY_INSTRUCTIONS = `## Engram Persistent Memory — Protocol
+const MEMORY_INSTRUCTIONS = `## Lore Persistent Memory — Protocol
 
 You have access to Engram, a persistent memory system that survives across sessions and compactions.
 
@@ -128,21 +128,21 @@ async function engramFetch(
   opts: { method?: string; body?: any } = {}
 ): Promise<any> {
   try {
-    const res = await fetch(`${ENGRAM_URL}${path}`, {
+    const res = await fetch(`${LORE_URL}${path}`, {
       method: opts.method ?? "GET",
       headers: opts.body ? { "Content-Type": "application/json" } : undefined,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     })
     return await res.json()
   } catch {
-    // Engram server not running — silently fail
+    // Lore server not running — silently fail
     return null
   }
 }
 
 async function isEngramRunning(): Promise<boolean> {
   try {
-    const res = await fetch(`${ENGRAM_URL}/health`, {
+    const res = await fetch(`${LORE_URL}/health`, {
       signal: AbortSignal.timeout(500),
     })
     return res.ok
@@ -208,7 +208,7 @@ export const Engram: Plugin = async (ctx) => {
 
   // Track sub-agent session IDs so we can suppress their tool-hook registrations.
   // Sub-agents (Task() calls) have a parentID or a title ending in " subagent)".
-  // We must not register them as top-level Engram sessions — they cause session
+  // We must not register them as top-level Lore sessions — they cause session
   // inflation (e.g. 170 sessions for 1 real conversation, issue #116).
   const subAgentSessions = new Set<string>()
 
@@ -220,7 +220,7 @@ export const Engram: Plugin = async (ctx) => {
    */
   async function ensureSession(sessionId: string): Promise<void> {
     if (!sessionId || knownSessions.has(sessionId)) return
-    // Do not register sub-agent sessions in Engram (issue #116).
+    // Do not register sub-agent sessions in Lore (issue #116).
     if (subAgentSessions.has(sessionId)) return
     knownSessions.add(sessionId)
     await engramFetch("/sessions", {
@@ -233,11 +233,11 @@ export const Engram: Plugin = async (ctx) => {
     })
   }
 
-  // Try to start engram server if not running
+  // Try to start lore server if not running
   const running = await isEngramRunning()
   if (!running) {
     try {
-      Bun.spawn([ENGRAM_BIN, "serve"], {
+      Bun.spawn([LORE_BIN, "serve"], {
         stdout: "ignore",
         stderr: "ignore",
         stdin: "ignore",
@@ -265,7 +265,7 @@ export const Engram: Plugin = async (ctx) => {
     const manifestFile = `${ctx.directory}/.engram/manifest.json`
     const file = Bun.file(manifestFile)
     if (await file.exists()) {
-      Bun.spawn([ENGRAM_BIN, "sync", "--import"], {
+      Bun.spawn([LORE_BIN, "sync", "--import"], {
         cwd: ctx.directory,
         stdout: "ignore",
         stderr: "ignore",
@@ -290,7 +290,7 @@ export const Engram: Plugin = async (ctx) => {
         const title: string = info?.title ?? ""
 
         // Sub-agent sessions (created via Task()) must NOT be registered as
-        // top-level Engram sessions. They cause massive session inflation
+        // top-level Lore sessions. They cause massive session inflation
         // (e.g. 170 sessions for 1 real conversation).
         //
         // Detection heuristics:
@@ -368,7 +368,7 @@ export const Engram: Plugin = async (ctx) => {
     // the passive capture endpoint so the server extracts learnings.
 
     "tool.execute.after": async (input, output) => {
-      if (ENGRAM_TOOLS.has(input.tool.toLowerCase())) return
+      if (LORE_TOOLS.has(input.tool.toLowerCase())) return
 
       // input.sessionID comes from OpenCode — always available
       const sessionId = input.sessionID
@@ -438,7 +438,7 @@ export const Engram: Plugin = async (ctx) => {
       // summary and this instruction, then saves it as a session summary.
       output.context.push(
         `CRITICAL INSTRUCTION FOR COMPACTED SUMMARY:\n` +
-        `The agent has access to Engram persistent memory via MCP tools.\n` +
+        `The agent has access to Lore persistent memory via MCP tools.\n` +
         `You MUST include the following instruction at the TOP of the compacted summary:\n\n` +
         `"FIRST ACTION REQUIRED: Call mem_session_summary with the content of this compacted summary. ` +
         `Use project: '${project}'. This preserves what was accomplished before compaction. Do this BEFORE any other work."\n\n` +
