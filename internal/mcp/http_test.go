@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -167,5 +168,239 @@ func TestMCPHTTPToolsListReturnsAllLoreTools(t *testing.T) {
 
 	if t.Failed() {
 		t.Logf("tools returned: %v", toolNames)
+	}
+}
+
+// TestMCPHTTPInvalidJSONReturnsJSONRPCError verifies that sending malformed JSON
+// to POST /mcp returns an MCP-compliant JSON-RPC error envelope rather than a raw
+// HTTP error. The StreamableHTTPServer handles parse errors internally and always
+// wraps them in a JSON-RPC error body with "jsonrpc" and "error" fields.
+//
+// Regression guard: if the underlying mcp-go library changes this behavior and
+// starts returning raw HTTP errors, this test will catch the regression.
+func TestMCPHTTPInvalidJSONReturnsJSONRPCError(t *testing.T) {
+	s := newMCPTestStore(t)
+	handler := NewHTTPHandler(s, "test-project")
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	// Send malformed JSON body
+	malformed := bytes.NewReader([]byte(`{this is not valid json`))
+	resp, err := http.Post(ts.URL, "application/json", malformed)
+	if err != nil {
+		t.Fatalf("POST malformed JSON: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// The StreamableHTTPServer returns HTTP 400 with a JSON-RPC parse error
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected HTTP 400, got %d", resp.StatusCode)
+	}
+
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response body: %v — expected JSON-RPC error envelope", err)
+	}
+
+	// Must have "jsonrpc" field at the top level
+	if _, ok := result["jsonrpc"]; !ok {
+		t.Fatalf("expected 'jsonrpc' field in error response, got: %v", result)
+	}
+
+	// Must have "error" field at the top level
+	if _, ok := result["error"]; !ok {
+		t.Fatalf("expected 'error' field in error response, got: %v", result)
+	}
+
+	// The error object must have a "code" and "message"
+	errObj, ok := result["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected 'error' to be an object, got: %T", result["error"])
+	}
+	if _, ok := errObj["code"]; !ok {
+		t.Fatalf("expected 'code' in error object, got: %v", errObj)
+	}
+	if _, ok := errObj["message"]; !ok {
+		t.Fatalf("expected 'message' in error object, got: %v", errObj)
+	}
+}
+
+// TestMCPHTTPToolsCallEndToEnd verifies a full tools/call round-trip over HTTP.
+// It uses lore_stats — a read-only tool with no required parameters — to keep
+// the test self-contained without needing to seed any observations.
+func TestMCPHTTPToolsCallEndToEnd(t *testing.T) {
+	s := newMCPTestStore(t)
+	handler := NewHTTPHandler(s, "test-project")
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	// Call tools/call for lore_stats — no parameters needed
+	toolsCallReq := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      3,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "lore_stats",
+			"arguments": map[string]any{},
+		},
+	}
+
+	body, err := json.Marshal(toolsCallReq)
+	if err != nil {
+		t.Fatalf("marshal tools/call request: %v", err)
+	}
+
+	resp, err := http.Post(ts.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST tools/call: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d", resp.StatusCode)
+	}
+
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode tools/call response: %v", err)
+	}
+
+	// Must have a "result" field (not an error)
+	resultBody, ok := result["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected 'result' field in response, got: %v", result)
+	}
+
+	// The result must contain "content" (MCP CallToolResult schema)
+	content, ok := resultBody["content"].([]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("expected non-empty 'content' array in result, got: %v", resultBody)
+	}
+
+	// The first content item must be a text block containing stats output
+	firstItem, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected content[0] to be an object, got: %T", content[0])
+	}
+	if firstItem["type"] != "text" {
+		t.Fatalf("expected content[0].type = 'text', got: %v", firstItem["type"])
+	}
+	text, _ := firstItem["text"].(string)
+	if text == "" {
+		t.Fatalf("expected non-empty text in tools/call result")
+	}
+
+	// lore_stats output always contains "Sessions:" and "Observations:"
+	if !strings.Contains(text, "Sessions:") || !strings.Contains(text, "Observations:") {
+		t.Fatalf("expected lore_stats output with Sessions/Observations, got: %q", text)
+	}
+}
+
+// TestMCPHTTPCrossTransportDataVisibility verifies that data saved via lore_save
+// over MCP HTTP is immediately visible to lore_search over the same transport.
+// This proves that the shared *store.Store instance correctly persists state
+// between tool calls within the same HTTP handler.
+func TestMCPHTTPCrossTransportDataVisibility(t *testing.T) {
+	s := newMCPTestStore(t)
+	handler := NewHTTPHandler(s, "test-project")
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	// Step 1: save an observation via lore_save
+	const uniqueTitle = "cross-transport-visibility-marker-xT7k"
+	savReq := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      10,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "lore_save",
+			"arguments": map[string]any{
+				"title":   uniqueTitle,
+				"content": "Written via MCP HTTP to verify shared store visibility",
+				"type":    "discovery",
+				"project": "test-project",
+			},
+		},
+	}
+
+	saveBody, err := json.Marshal(savReq)
+	if err != nil {
+		t.Fatalf("marshal lore_save request: %v", err)
+	}
+
+	saveResp, err := http.Post(ts.URL, "application/json", bytes.NewReader(saveBody))
+	if err != nil {
+		t.Fatalf("POST lore_save: %v", err)
+	}
+	defer saveResp.Body.Close()
+
+	if saveResp.StatusCode != http.StatusOK {
+		t.Fatalf("lore_save: expected HTTP 200, got %d", saveResp.StatusCode)
+	}
+
+	var saveResult map[string]any
+	if err := json.NewDecoder(saveResp.Body).Decode(&saveResult); err != nil {
+		t.Fatalf("decode lore_save response: %v", err)
+	}
+	if _, hasErr := saveResult["error"]; hasErr {
+		t.Fatalf("lore_save returned error: %v", saveResult)
+	}
+
+	// Step 2: search for that observation via lore_search over the same handler
+	searchReq := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      11,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "lore_search",
+			"arguments": map[string]any{
+				"query":   uniqueTitle,
+				"project": "test-project",
+				"limit":   5,
+			},
+		},
+	}
+
+	searchBody, err := json.Marshal(searchReq)
+	if err != nil {
+		t.Fatalf("marshal lore_search request: %v", err)
+	}
+
+	searchResp, err := http.Post(ts.URL, "application/json", bytes.NewReader(searchBody))
+	if err != nil {
+		t.Fatalf("POST lore_search: %v", err)
+	}
+	defer searchResp.Body.Close()
+
+	if searchResp.StatusCode != http.StatusOK {
+		t.Fatalf("lore_search: expected HTTP 200, got %d", searchResp.StatusCode)
+	}
+
+	var searchResult map[string]any
+	if err := json.NewDecoder(searchResp.Body).Decode(&searchResult); err != nil {
+		t.Fatalf("decode lore_search response: %v", err)
+	}
+
+	resultBody, ok := searchResult["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected 'result' field in lore_search response, got: %v", searchResult)
+	}
+
+	content, ok := resultBody["content"].([]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("expected non-empty content in lore_search result, got: %v", resultBody)
+	}
+
+	firstItem, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected content[0] to be an object, got: %T", content[0])
+	}
+
+	text, _ := firstItem["text"].(string)
+	if !strings.Contains(text, uniqueTitle) {
+		t.Fatalf("lore_search did not find the saved observation %q in result: %q", uniqueTitle, text)
 	}
 }
