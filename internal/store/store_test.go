@@ -4439,3 +4439,428 @@ func TestCountObservationsForProject(t *testing.T) {
 		t.Errorf("expected 0 for beta, got %d", count)
 	}
 }
+
+// ─── Skills Tests ─────────────────────────────────────────────────────────────
+
+// Task 1.4 — assert skills, skill_versions, skills_fts, and 3 triggers exist after New()
+func TestSkillsMigrationCreatesTablesAndTriggers(t *testing.T) {
+	s := newTestStore(t)
+
+	tables := []string{"skills", "skill_versions", "skills_fts"}
+	for _, tbl := range tables {
+		var name string
+		err := s.db.QueryRow(
+			"SELECT name FROM sqlite_master WHERE type IN ('table','shadow') AND name = ?", tbl,
+		).Scan(&name)
+		if err != nil {
+			t.Errorf("expected table %q to exist, got: %v", tbl, err)
+		}
+	}
+
+	triggers := []string{"skills_fts_insert", "skills_fts_delete", "skills_fts_update"}
+	for _, tr := range triggers {
+		var name string
+		err := s.db.QueryRow(
+			"SELECT name FROM sqlite_master WHERE type='trigger' AND name = ?", tr,
+		).Scan(&name)
+		if err != nil {
+			t.Errorf("expected trigger %q to exist, got: %v", tr, err)
+		}
+	}
+}
+
+// Task 1.5 — call New() on existing DB, assert no error and existing rows survive
+func TestSkillsMigrationIsIdempotent(t *testing.T) {
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = t.TempDir()
+
+	// First open
+	s1, err := New(cfg)
+	if err != nil {
+		t.Fatalf("first New(): %v", err)
+	}
+	// Seed a skill directly via SQL so we can verify data survives
+	if _, err := s1.db.Exec(
+		`INSERT INTO skills (name, display_name, content) VALUES ('seed-skill', 'Seed Skill', 'content')`,
+	); err != nil {
+		t.Fatalf("seed skill: %v", err)
+	}
+	_ = s1.Close()
+
+	// Second open — must not error and must not lose the row
+	s2, err := New(cfg)
+	if err != nil {
+		t.Fatalf("second New() (idempotent migration): %v", err)
+	}
+	defer s2.Close()
+
+	var count int
+	if err := s2.db.QueryRow("SELECT COUNT(*) FROM skills WHERE name='seed-skill'").Scan(&count); err != nil {
+		t.Fatalf("count seed skill: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected seed-skill to survive idempotent migration, got count=%d", count)
+	}
+}
+
+// Task 2.1 — TestCreateSkillHappyPath + TestCreateSkillDuplicateNameReturnsError
+func TestCreateSkillHappyPath(t *testing.T) {
+	s := newTestStore(t)
+
+	skill, err := s.CreateSkill(CreateSkillParams{
+		Name:        "test-skill",
+		DisplayName: "Test Skill",
+		Category:    "testing",
+		Stack:       "Go",
+		Triggers:    "when writing tests",
+		Content:     "Use table-driven tests",
+		ChangedBy:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+	if skill == nil {
+		t.Fatal("expected non-nil skill")
+	}
+	if skill.Name != "test-skill" {
+		t.Errorf("expected name 'test-skill', got %q", skill.Name)
+	}
+	if skill.Version != 1 {
+		t.Errorf("expected version 1, got %d", skill.Version)
+	}
+	if skill.ID == 0 {
+		t.Error("expected non-zero ID")
+	}
+
+	// Verify skill_versions row was inserted
+	var versionCount int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM skill_versions WHERE skill_id = ?", skill.ID).Scan(&versionCount); err != nil {
+		t.Fatalf("count skill_versions: %v", err)
+	}
+	if versionCount != 1 {
+		t.Errorf("expected 1 skill_versions row, got %d", versionCount)
+	}
+}
+
+func TestCreateSkillDuplicateNameReturnsError(t *testing.T) {
+	s := newTestStore(t)
+
+	params := CreateSkillParams{
+		Name:        "dup-skill",
+		DisplayName: "Dup Skill",
+		Content:     "content",
+		ChangedBy:   "system",
+	}
+	if _, err := s.CreateSkill(params); err != nil {
+		t.Fatalf("first CreateSkill: %v", err)
+	}
+	_, err := s.CreateSkill(params)
+	if err == nil {
+		t.Fatal("expected error for duplicate name, got nil")
+	}
+}
+
+// Task 2.3 — TestUpdateSkillIncrementsVersionAndInsertsVersionRow + TestUpdateSkillNotFoundReturnsErrNoRows
+func TestUpdateSkillIncrementsVersionAndInsertsVersionRow(t *testing.T) {
+	s := newTestStore(t)
+
+	created, err := s.CreateSkill(CreateSkillParams{
+		Name:        "update-skill",
+		DisplayName: "Update Skill",
+		Content:     "original content",
+		ChangedBy:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	newContent := "updated content"
+	updated, err := s.UpdateSkill("update-skill", UpdateSkillParams{
+		Content:   &newContent,
+		ChangedBy: "mcp",
+	})
+	if err != nil {
+		t.Fatalf("UpdateSkill: %v", err)
+	}
+	if updated.Version != created.Version+1 {
+		t.Errorf("expected version %d, got %d", created.Version+1, updated.Version)
+	}
+	if updated.Content != "updated content" {
+		t.Errorf("expected updated content, got %q", updated.Content)
+	}
+
+	// Verify a new skill_versions row was inserted
+	var versionCount int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM skill_versions WHERE skill_id = ?", created.ID).Scan(&versionCount); err != nil {
+		t.Fatalf("count skill_versions: %v", err)
+	}
+	if versionCount != 2 {
+		t.Errorf("expected 2 skill_versions rows (v1 + v2), got %d", versionCount)
+	}
+}
+
+func TestUpdateSkillNotFoundReturnsErrNoRows(t *testing.T) {
+	s := newTestStore(t)
+
+	newContent := "something"
+	_, err := s.UpdateSkill("nonexistent-skill", UpdateSkillParams{
+		Content:   &newContent,
+		ChangedBy: "system",
+	})
+	if err == nil {
+		t.Fatal("expected error for nonexistent skill, got nil")
+	}
+}
+
+// Task 2.5 — TestGetSkillFound + TestGetSkillNotFoundReturnsErrNoRows
+func TestGetSkillFound(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.CreateSkill(CreateSkillParams{
+		Name:        "get-skill",
+		DisplayName: "Get Skill",
+		Content:     "skill content here",
+		ChangedBy:   "system",
+	}); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	skill, err := s.GetSkill("get-skill")
+	if err != nil {
+		t.Fatalf("GetSkill: %v", err)
+	}
+	if skill == nil {
+		t.Fatal("expected non-nil skill")
+	}
+	if skill.Name != "get-skill" {
+		t.Errorf("expected 'get-skill', got %q", skill.Name)
+	}
+	if skill.Content != "skill content here" {
+		t.Errorf("expected full content, got %q", skill.Content)
+	}
+}
+
+func TestGetSkillNotFoundReturnsErrNoRows(t *testing.T) {
+	s := newTestStore(t)
+
+	_, err := s.GetSkill("missing-skill")
+	if err == nil {
+		t.Fatal("expected error for missing skill, got nil")
+	}
+}
+
+// Task 2.7 — TestListSkillsNoFilter + TestListSkillsStackFilter + TestListSkillsCategoryFilter + TestListSkillsExcludesContentField
+func seedSkills(t *testing.T, s *Store) {
+	t.Helper()
+	skills := []CreateSkillParams{
+		{Name: "go-testing", DisplayName: "Go Testing", Category: "testing", Stack: "Go", Content: "test content go", ChangedBy: "system"},
+		{Name: "nestjs-api", DisplayName: "NestJS API", Category: "backend", Stack: "TypeScript", Content: "nestjs content ts", ChangedBy: "system"},
+		{Name: "react-hooks", DisplayName: "React Hooks", Category: "frontend", Stack: "TypeScript", Content: "react hooks content", ChangedBy: "system"},
+	}
+	for _, p := range skills {
+		if _, err := s.CreateSkill(p); err != nil {
+			t.Fatalf("seedSkills CreateSkill(%s): %v", p.Name, err)
+		}
+	}
+}
+
+func TestListSkillsNoFilter(t *testing.T) {
+	s := newTestStore(t)
+	seedSkills(t, s)
+
+	skills, err := s.ListSkills(ListSkillsParams{})
+	if err != nil {
+		t.Fatalf("ListSkills: %v", err)
+	}
+	if len(skills) != 3 {
+		t.Errorf("expected 3 skills, got %d", len(skills))
+	}
+}
+
+func TestListSkillsStackFilter(t *testing.T) {
+	s := newTestStore(t)
+	seedSkills(t, s)
+
+	skills, err := s.ListSkills(ListSkillsParams{Stack: "TypeScript"})
+	if err != nil {
+		t.Fatalf("ListSkills stack filter: %v", err)
+	}
+	if len(skills) != 2 {
+		t.Errorf("expected 2 TypeScript skills, got %d", len(skills))
+	}
+}
+
+func TestListSkillsCategoryFilter(t *testing.T) {
+	s := newTestStore(t)
+	seedSkills(t, s)
+
+	skills, err := s.ListSkills(ListSkillsParams{Category: "testing"})
+	if err != nil {
+		t.Fatalf("ListSkills category filter: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Errorf("expected 1 testing skill, got %d", len(skills))
+	}
+}
+
+func TestListSkillsExcludesContentField(t *testing.T) {
+	s := newTestStore(t)
+	seedSkills(t, s)
+
+	skills, err := s.ListSkills(ListSkillsParams{})
+	if err != nil {
+		t.Fatalf("ListSkills: %v", err)
+	}
+	for _, sk := range skills {
+		if sk.Content != "" {
+			t.Errorf("expected Content to be empty in ListSkills, got %q for skill %q", sk.Content, sk.Name)
+		}
+	}
+}
+
+// Task 2.9 — TestGetSkillVersionsReturnsHistory + TestGetSkillVersionsUnknownSkillReturnsEmptySlice
+func TestGetSkillVersionsReturnsHistory(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.CreateSkill(CreateSkillParams{
+		Name:        "versioned-skill",
+		DisplayName: "Versioned Skill",
+		Content:     "v1 content",
+		ChangedBy:   "system",
+	}); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	c2 := "v2 content"
+	if _, err := s.UpdateSkill("versioned-skill", UpdateSkillParams{Content: &c2, ChangedBy: "mcp"}); err != nil {
+		t.Fatalf("UpdateSkill v2: %v", err)
+	}
+	c3 := "v3 content"
+	if _, err := s.UpdateSkill("versioned-skill", UpdateSkillParams{Content: &c3, ChangedBy: "mcp"}); err != nil {
+		t.Fatalf("UpdateSkill v3: %v", err)
+	}
+
+	versions, err := s.GetSkillVersions("versioned-skill")
+	if err != nil {
+		t.Fatalf("GetSkillVersions: %v", err)
+	}
+	if len(versions) != 3 {
+		t.Errorf("expected 3 versions, got %d", len(versions))
+	}
+	// First should be highest version (DESC order)
+	if versions[0].Version != 3 {
+		t.Errorf("expected first version to be 3, got %d", versions[0].Version)
+	}
+}
+
+func TestGetSkillVersionsUnknownSkillReturnsEmptySlice(t *testing.T) {
+	s := newTestStore(t)
+
+	versions, err := s.GetSkillVersions("ghost-skill")
+	if err != nil {
+		t.Fatalf("GetSkillVersions for unknown skill: %v", err)
+	}
+	if len(versions) != 0 {
+		t.Errorf("expected empty slice, got %d versions", len(versions))
+	}
+}
+
+// Task 3.1 — FTS tests: keyword, content, special-char sanitization, FTS empty after delete
+func TestSearchSkillsByTriggerKeyword(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.CreateSkill(CreateSkillParams{
+		Name:        "fts-skill-trigger",
+		DisplayName: "FTS Skill",
+		Triggers:    "when writing htmx",
+		Content:     "htmx guide content",
+		Stack:       "Go",
+		ChangedBy:   "system",
+	}); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	results, err := s.ListSkills(ListSkillsParams{Query: "htmx"})
+	if err != nil {
+		t.Fatalf("ListSkills(Query=htmx): %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("expected FTS to find skill by trigger keyword 'htmx', got 0 results")
+	}
+}
+
+func TestSearchSkillsByContent(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.CreateSkill(CreateSkillParams{
+		Name:        "fts-skill-content",
+		DisplayName: "FTS Content Skill",
+		Content:     "use bubble tea for terminal UI",
+		ChangedBy:   "system",
+	}); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	results, err := s.ListSkills(ListSkillsParams{Query: "bubble"})
+	if err != nil {
+		t.Fatalf("ListSkills(Query=bubble): %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("expected FTS to find skill by content keyword 'bubble', got 0 results")
+	}
+}
+
+func TestSearchSkillsSanitizesSpecialChars(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.CreateSkill(CreateSkillParams{
+		Name:        "fts-skill-special",
+		DisplayName: "FTS Special Skill",
+		Content:     "handles special characters gracefully",
+		ChangedBy:   "system",
+	}); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	// Query with special FTS chars that would cause syntax errors if not sanitized
+	_, err := s.ListSkills(ListSkillsParams{Query: `"special" OR AND`})
+	if err != nil {
+		t.Errorf("expected sanitized special-char query to not error, got: %v", err)
+	}
+}
+
+func TestSearchSkillsFTSEmptyAfterDelete(t *testing.T) {
+	s := newTestStore(t)
+	skill, err := s.CreateSkill(CreateSkillParams{
+		Name:        "fts-delete-skill",
+		DisplayName: "FTS Delete Skill",
+		Content:     "uniquewordxyz content",
+		ChangedBy:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	// Verify it's findable before delete
+	before, err := s.ListSkills(ListSkillsParams{Query: "uniquewordxyz"})
+	if err != nil {
+		t.Fatalf("ListSkills before delete: %v", err)
+	}
+	if len(before) == 0 {
+		t.Fatal("expected to find skill before delete")
+	}
+
+	// Delete via direct SQL (no DeleteSkill method yet) — must delete versions first (FK constraint)
+	if _, err := s.db.Exec("DELETE FROM skill_versions WHERE skill_id = ?", skill.ID); err != nil {
+		t.Fatalf("DELETE skill_versions: %v", err)
+	}
+	if _, err := s.db.Exec("DELETE FROM skills WHERE id = ?", skill.ID); err != nil {
+		t.Fatalf("DELETE skill: %v", err)
+	}
+
+	// Verify FTS no longer returns it
+	after, err := s.ListSkills(ListSkillsParams{Query: "uniquewordxyz"})
+	if err != nil {
+		t.Fatalf("ListSkills after delete: %v", err)
+	}
+	if len(after) != 0 {
+		t.Errorf("expected 0 results after delete, got %d", len(after))
+	}
+}

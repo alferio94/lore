@@ -928,7 +928,9 @@ func TestResolveToolsAgentProfile(t *testing.T) {
 		"lore_save", "lore_search", "lore_context", "lore_session_summary",
 		"lore_session_start", "lore_session_end", "lore_get_observation",
 		"lore_suggest_topic_key", "lore_capture_passive", "lore_save_prompt",
-		"lore_update", // skills explicitly say "use lore_update when you have an exact ID to correct"
+		"lore_update",      // skills explicitly say "use lore_update when you have an exact ID to correct"
+		"lore_list_skills", // skills system: list available skills by stack/category
+		"lore_get_skill",   // skills system: get full skill content by name
 	}
 	for _, tool := range expectedTools {
 		if !result[tool] {
@@ -973,12 +975,13 @@ func TestResolveToolsCombinedProfiles(t *testing.T) {
 		t.Fatal("expected non-nil allowlist for combined profiles")
 	}
 
-	// Should have all 15 tools
+	// Should have all 17 tools (11 agent + 2 skills + 4 admin)
 	allTools := []string{
 		"lore_save", "lore_search", "lore_context", "lore_session_summary",
 		"lore_session_start", "lore_session_end", "lore_get_observation",
 		"lore_suggest_topic_key", "lore_capture_passive", "lore_save_prompt",
-		"lore_update", "lore_delete", "lore_stats", "lore_timeline", "lore_merge_projects",
+		"lore_update", "lore_list_skills", "lore_get_skill",
+		"lore_delete", "lore_stats", "lore_timeline", "lore_merge_projects",
 	}
 	for _, tool := range allTools {
 		if !result[tool] {
@@ -1099,12 +1102,12 @@ func TestNewServerWithToolsAgentProfile(t *testing.T) {
 
 	tools := srv.ListTools()
 
-	// Agent tools should be present (11 tools)
+	// Agent tools should be present (13 tools: 11 core + 2 skill tools)
 	agentTools := []string{
 		"lore_save", "lore_search", "lore_context", "lore_session_summary",
 		"lore_session_start", "lore_session_end", "lore_get_observation",
 		"lore_suggest_topic_key", "lore_capture_passive", "lore_save_prompt",
-		"lore_update",
+		"lore_update", "lore_list_skills", "lore_get_skill",
 	}
 	for _, name := range agentTools {
 		if tools[name] == nil {
@@ -1163,7 +1166,8 @@ func TestNewServerWithToolsNilRegistersAll(t *testing.T) {
 		"lore_save", "lore_search", "lore_context", "lore_session_summary",
 		"lore_session_start", "lore_session_end", "lore_get_observation",
 		"lore_suggest_topic_key", "lore_capture_passive", "lore_save_prompt",
-		"lore_update", "lore_delete", "lore_stats", "lore_timeline", "lore_merge_projects",
+		"lore_update", "lore_list_skills", "lore_get_skill",
+		"lore_delete", "lore_stats", "lore_timeline", "lore_merge_projects",
 	}
 
 	for _, name := range allTools {
@@ -1202,14 +1206,14 @@ func TestNewServerBackwardsCompatible(t *testing.T) {
 	srv := NewServer(s)
 	tools := srv.ListTools()
 
-	// 11 agent + 4 admin = 15 total
-	if len(tools) != 15 {
-		t.Errorf("NewServer should register all 15 tools, got %d", len(tools))
+	// 13 agent (11 core + 2 skills) + 4 admin = 17 total
+	if len(tools) != 17 {
+		t.Errorf("NewServer should register all 17 tools, got %d", len(tools))
 	}
 }
 
 func TestProfileConsistency(t *testing.T) {
-	// Verify that agent + admin = all 15 tools
+	// Verify that agent + admin = all 17 tools (13 agent + 4 admin)
 	combined := make(map[string]bool)
 	for tool := range ProfileAgent {
 		combined[tool] = true
@@ -1218,8 +1222,8 @@ func TestProfileConsistency(t *testing.T) {
 		combined[tool] = true
 	}
 
-	if len(combined) != 15 {
-		t.Errorf("agent + admin should cover all 15 tools, got %d", len(combined))
+	if len(combined) != 17 {
+		t.Errorf("agent + admin should cover all 17 tools, got %d", len(combined))
 	}
 
 	// Verify no overlap between profiles
@@ -1517,9 +1521,9 @@ func TestNewServerWithConfig(t *testing.T) {
 		t.Fatal("expected MCP server instance")
 	}
 	tools := srv.ListTools()
-	// Should have all 15 tools
-	if len(tools) != 15 {
-		t.Errorf("NewServerWithConfig should register all 15 tools, got %d", len(tools))
+	// Should have all 17 tools (13 agent + 4 admin)
+	if len(tools) != 17 {
+		t.Errorf("NewServerWithConfig should register all 17 tools, got %d", len(tools))
 	}
 }
 
@@ -1825,5 +1829,218 @@ func TestHandleSaveDefaultProjectDoesNotOverrideExplicit(t *testing.T) {
 	}
 	if len(defaultObs) > 0 {
 		t.Fatal("observation should NOT be in default-project")
+	}
+}
+
+// ─── Phase 4: Skills MCP Tools ───────────────────────────────────────────────
+
+// seedSkill is a test helper that creates a skill in the store.
+func seedSkill(t *testing.T, s *store.Store, name, displayName, stack, category, triggers, content string) {
+	t.Helper()
+	_, err := s.CreateSkill(store.CreateSkillParams{
+		Name:        name,
+		DisplayName: displayName,
+		Stack:       stack,
+		Category:    category,
+		Triggers:    triggers,
+		Content:     content,
+		ChangedBy:   "test",
+	})
+	if err != nil {
+		t.Fatalf("seedSkill(%q): %v", name, err)
+	}
+}
+
+// ─── 4.1: lore_list_skills handler tests ─────────────────────────────────────
+
+func TestHandleListSkillsNoParams(t *testing.T) {
+	s := newMCPTestStore(t)
+	seedSkill(t, s, "lore-auth-guard", "Auth Guard", "nestjs", "conventions", "When writing auth", "# Auth Guard content")
+	seedSkill(t, s, "lore-jwt-middleware", "JWT Middleware", "angular", "patterns", "When using JWT", "# JWT Middleware content")
+
+	h := handleListSkills(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	// Should return JSON array with 2 items
+	if !strings.Contains(text, "lore-auth-guard") {
+		t.Errorf("expected lore-auth-guard in output, got %q", text)
+	}
+	if !strings.Contains(text, "lore-jwt-middleware") {
+		t.Errorf("expected lore-jwt-middleware in output, got %q", text)
+	}
+	// Content field must NOT appear
+	if strings.Contains(text, "Auth Guard content") || strings.Contains(text, "JWT Middleware content") {
+		t.Errorf("content field should NOT appear in list results, got %q", text)
+	}
+}
+
+func TestHandleListSkillsWithStackFilter(t *testing.T) {
+	s := newMCPTestStore(t)
+	seedSkill(t, s, "lore-ng-guard", "Angular Guard", "angular", "conventions", "Angular trigger", "Angular content")
+	seedSkill(t, s, "lore-java-service", "Java Service", "java", "patterns", "Java trigger", "Java content")
+
+	h := handleListSkills(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"stack": "angular",
+	}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	if !strings.Contains(text, "lore-ng-guard") {
+		t.Errorf("expected lore-ng-guard in output, got %q", text)
+	}
+	if strings.Contains(text, "lore-java-service") {
+		t.Errorf("lore-java-service should NOT appear when filtering by stack=angular, got %q", text)
+	}
+}
+
+func TestHandleListSkillsEmptyDB(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	h := handleListSkills(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error on empty DB: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	// Should return empty array — not an error
+	if !strings.Contains(text, "[]") {
+		t.Errorf("expected empty JSON array [], got %q", text)
+	}
+}
+
+// ─── 4.3: lore_get_skill handler tests ───────────────────────────────────────
+
+func TestHandleGetSkillFound(t *testing.T) {
+	s := newMCPTestStore(t)
+	seedSkill(t, s, "lore-auth-guard", "Auth Guard", "nestjs", "conventions", "When writing auth", "# Full auth content here")
+
+	h := handleGetSkill(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"name": "lore-auth-guard",
+	}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	if !strings.Contains(text, "lore-auth-guard") {
+		t.Errorf("expected skill name in output, got %q", text)
+	}
+	// Full content MUST be present for get (unlike list)
+	if !strings.Contains(text, "Full auth content here") {
+		t.Errorf("expected full content in get response, got %q", text)
+	}
+}
+
+func TestHandleGetSkillNotFound(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	h := handleGetSkill(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"name": "ghost-skill",
+	}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected tool error for non-existent skill, got %q", callResultText(t, res))
+	}
+}
+
+func TestHandleGetSkillMissingNameParam(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	h := handleGetSkill(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected validation error when name is missing, got %q", callResultText(t, res))
+	}
+}
+
+// ─── 4.6: skills:// resource handler tests ───────────────────────────────────
+
+func TestHandleSkillResourceFound(t *testing.T) {
+	s := newMCPTestStore(t)
+	seedSkill(t, s, "lore-resource-skill", "Resource Skill", "go", "architecture", "When testing resources", "# Markdown content for resource")
+
+	h := handleSkillResource(s)
+	req := mcppkg.ReadResourceRequest{Params: mcppkg.ReadResourceParams{
+		URI: "skills://lore-resource-skill",
+	}}
+	contents, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("resource handler error: %v", err)
+	}
+	if len(contents) == 0 {
+		t.Fatal("expected at least one resource content")
+	}
+
+	text, ok := contents[0].(mcppkg.TextResourceContents)
+	if !ok {
+		t.Fatalf("expected TextResourceContents, got %T", contents[0])
+	}
+	if text.MIMEType != "text/markdown" {
+		t.Errorf("expected MIME type text/markdown, got %q", text.MIMEType)
+	}
+	if !strings.Contains(text.Text, "Markdown content for resource") {
+		t.Errorf("expected skill content in resource text, got %q", text.Text)
+	}
+}
+
+func TestHandleSkillResourceNotFound(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	h := handleSkillResource(s)
+	req := mcppkg.ReadResourceRequest{Params: mcppkg.ReadResourceParams{
+		URI: "skills://ghost-skill",
+	}}
+	_, err := h(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for non-existent resource, got nil")
+	}
+}
+
+// ─── 5.1 & 5.2: Updated profile assertions ───────────────────────────────────
+
+func TestResolveToolsAgentProfileIncludesSkillTools(t *testing.T) {
+	result := ResolveTools("agent")
+	if result == nil {
+		t.Fatal("expected non-nil allowlist for 'agent'")
+	}
+
+	skillTools := []string{"lore_list_skills", "lore_get_skill"}
+	for _, tool := range skillTools {
+		if !result[tool] {
+			t.Errorf("agent profile missing skill tool: %s", tool)
+		}
 	}
 }

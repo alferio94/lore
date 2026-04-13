@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -63,6 +64,8 @@ var ProfileAgent = map[string]bool{
 	"lore_capture_passive":   true, // extract learnings from text — referenced in Gemini/Codex protocol
 	"lore_save_prompt":       true, // save user prompts
 	"lore_update":            true, // update observation by ID — skills say "use lore_update when you have an exact ID to correct"
+	"lore_list_skills":       true, // list available skills by stack/category — Phase 3 skills system
+	"lore_get_skill":         true, // get full skill content by name — Phase 3 skills system
 }
 
 // ProfileAdmin contains tools for TUI, dashboards, and manual curation
@@ -132,9 +135,16 @@ CORE TOOLS (always available — use without ToolSearch):
   lore_get_observation — get full untruncated content of a search result by ID
   lore_save_prompt — save user prompt for context
 
+SKILLS TOOLS (discover and read team coding skills):
+  lore_list_skills — list available skills filtered by stack or category (returns metadata, no content)
+  lore_get_skill — get full skill content by name (returns markdown content + metadata)
+
 DEFERRED TOOLS (use ToolSearch when needed):
   lore_update, lore_suggest_topic_key, lore_session_start, lore_session_end,
   lore_stats, lore_delete, lore_timeline, lore_capture_passive, lore_merge_projects
+
+SKILLS RESOURCES (access skills as MCP resources):
+  skills://{name} — read a skill as a markdown resource
 
 PROACTIVE SAVE RULE: Call lore_save immediately after ANY decision, bug fix, discovery, or convention — not just when asked.`
 
@@ -152,9 +162,11 @@ func NewServerWithConfig(s *store.Store, cfg MCPConfig, allowlist map[string]boo
 		"0.1.0",
 		server.WithToolCapabilities(true),
 		server.WithInstructions(serverInstructions),
+		server.WithResourceCapabilities(false, false),
 	)
 
 	registerTools(srv, s, cfg, allowlist)
+	registerResources(srv, s)
 	return srv
 }
 
@@ -630,6 +642,49 @@ Duplicates are automatically detected and skipped — safe to call multiple time
 				),
 			),
 			handleMergeProjects(s),
+		)
+	}
+
+	// ─── lore_list_skills (profile: agent) ───────────────────────────────
+	if shouldRegister("lore_list_skills", allowlist) {
+		srv.AddTool(
+			mcp.NewTool("lore_list_skills",
+				mcp.WithDescription("List available team coding skills. Returns metadata (name, display_name, category, stack, triggers, version) without content. Filter by stack or category, or use query for full-text search."),
+				mcp.WithTitleAnnotation("List Skills"),
+				mcp.WithReadOnlyHintAnnotation(true),
+				mcp.WithDestructiveHintAnnotation(false),
+				mcp.WithIdempotentHintAnnotation(true),
+				mcp.WithOpenWorldHintAnnotation(false),
+				mcp.WithString("stack",
+					mcp.Description("Filter by technology stack (e.g. 'angular', 'nestjs', 'java')"),
+				),
+				mcp.WithString("category",
+					mcp.Description("Filter by skill category (e.g. 'conventions', 'architecture', 'patterns')"),
+				),
+				mcp.WithString("query",
+					mcp.Description("Full-text search query across name, triggers, content, and stack"),
+				),
+			),
+			handleListSkills(s),
+		)
+	}
+
+	// ─── lore_get_skill (profile: agent) ─────────────────────────────────
+	if shouldRegister("lore_get_skill", allowlist) {
+		srv.AddTool(
+			mcp.NewTool("lore_get_skill",
+				mcp.WithDescription("Get the full content of a skill by name. Returns complete markdown content plus metadata (display_name, category, stack, triggers, version)."),
+				mcp.WithTitleAnnotation("Get Skill"),
+				mcp.WithReadOnlyHintAnnotation(true),
+				mcp.WithDestructiveHintAnnotation(false),
+				mcp.WithIdempotentHintAnnotation(true),
+				mcp.WithOpenWorldHintAnnotation(false),
+				mcp.WithString("name",
+					mcp.Required(),
+					mcp.Description("The skill name (e.g. 'lore-auth-guard', 'lore-nestjs-conventions')"),
+				),
+			),
+			handleGetSkill(s),
 		)
 	}
 }
@@ -1183,6 +1238,128 @@ func handleMergeProjects(s *store.Store) server.ToolHandlerFunc {
 		msg += fmt.Sprintf("  Prompts moved:      %d\n", result.PromptsUpdated)
 
 		return mcp.NewToolResultText(msg), nil
+	}
+}
+
+// ─── Skills Handlers ─────────────────────────────────────────────────────────
+
+func handleListSkills(s *store.Store) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		stack, _ := req.GetArguments()["stack"].(string)
+		category, _ := req.GetArguments()["category"].(string)
+		query, _ := req.GetArguments()["query"].(string)
+
+		skills, err := s.ListSkills(store.ListSkillsParams{
+			Stack:    stack,
+			Category: category,
+			Query:    query,
+		})
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to list skills: %s", err)), nil
+		}
+
+		if len(skills) == 0 {
+			return mcp.NewToolResultText("[]"), nil
+		}
+
+		// Return metadata only — strip content field from each skill
+		type skillMeta struct {
+			ID          int64  `json:"id"`
+			Name        string `json:"name"`
+			DisplayName string `json:"display_name"`
+			Category    string `json:"category"`
+			Stack       string `json:"stack"`
+			Triggers    string `json:"triggers"`
+			Version     int    `json:"version"`
+			IsActive    bool   `json:"is_active"`
+			UpdatedAt   string `json:"updated_at"`
+		}
+		metas := make([]skillMeta, len(skills))
+		for i, sk := range skills {
+			metas[i] = skillMeta{
+				ID:          sk.ID,
+				Name:        sk.Name,
+				DisplayName: sk.DisplayName,
+				Category:    sk.Category,
+				Stack:       sk.Stack,
+				Triggers:    sk.Triggers,
+				Version:     sk.Version,
+				IsActive:    sk.IsActive,
+				UpdatedAt:   sk.UpdatedAt,
+			}
+		}
+
+		data, err := json.Marshal(metas)
+		if err != nil {
+			return mcp.NewToolResultError("Failed to marshal skills: " + err.Error()), nil
+		}
+
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func handleGetSkill(s *store.Store) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		name, _ := req.GetArguments()["name"].(string)
+		if strings.TrimSpace(name) == "" {
+			return mcp.NewToolResultError("name is required"), nil
+		}
+
+		skill, err := s.GetSkill(name)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Skill %q not found", name)), nil
+		}
+		if skill == nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Skill %q not found", name)), nil
+		}
+
+		data, err := json.Marshal(skill)
+		if err != nil {
+			return mcp.NewToolResultError("Failed to marshal skill: " + err.Error()), nil
+		}
+
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+// registerResources registers MCP resource templates on the server.
+func registerResources(srv *server.MCPServer, s *store.Store) {
+	srv.AddResourceTemplate(
+		mcp.NewResourceTemplate(
+			"skills://{name}",
+			"Skill",
+			mcp.WithTemplateDescription("Read a team coding skill by name. Returns the full markdown content of the skill."),
+			mcp.WithTemplateMIMEType("text/markdown"),
+		),
+		handleSkillResource(s),
+	)
+}
+
+func handleSkillResource(s *store.Store) server.ResourceTemplateHandlerFunc {
+	return func(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+		uri := req.Params.URI
+
+		// Extract name from skills://{name}
+		name := strings.TrimPrefix(uri, "skills://")
+		if name == "" || name == uri {
+			return nil, fmt.Errorf("invalid skills URI: %q", uri)
+		}
+
+		skill, err := s.GetSkill(name)
+		if err != nil {
+			return nil, fmt.Errorf("skill %q not found: %w", name, err)
+		}
+		if skill == nil {
+			return nil, fmt.Errorf("skill %q not found", name)
+		}
+
+		return []mcp.ResourceContents{
+			mcp.TextResourceContents{
+				URI:      uri,
+				MIMEType: "text/markdown",
+				Text:     skill.Content,
+			},
+		}, nil
 	}
 }
 

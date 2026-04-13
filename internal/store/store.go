@@ -144,6 +144,57 @@ type AddPromptParams struct {
 	Project   string `json:"project,omitempty"`
 }
 
+// ─── Skills ──────────────────────────────────────────────────────────────────
+
+type Skill struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Category    string `json:"category"`
+	Stack       string `json:"stack"`
+	Triggers    string `json:"triggers"`
+	Content     string `json:"content"`
+	Version     int    `json:"version"`
+	IsActive    bool   `json:"is_active"`
+	ChangedBy   string `json:"changed_by"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+type SkillVersion struct {
+	ID        int64  `json:"id"`
+	SkillID   int64  `json:"skill_id"`
+	Version   int    `json:"version"`
+	Content   string `json:"content"`
+	ChangedBy string `json:"changed_by"`
+	CreatedAt string `json:"created_at"`
+}
+
+type ListSkillsParams struct {
+	Stack    string `json:"stack,omitempty"`
+	Category string `json:"category,omitempty"`
+	Query    string `json:"query,omitempty"` // FTS5 search when non-empty
+}
+
+type CreateSkillParams struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Category    string `json:"category"`
+	Stack       string `json:"stack"`
+	Triggers    string `json:"triggers"`
+	Content     string `json:"content"`
+	ChangedBy   string `json:"changed_by"`
+}
+
+type UpdateSkillParams struct {
+	DisplayName *string `json:"display_name,omitempty"`
+	Category    *string `json:"category,omitempty"`
+	Stack       *string `json:"stack,omitempty"`
+	Triggers    *string `json:"triggers,omitempty"`
+	Content     *string `json:"content,omitempty"`
+	ChangedBy   string  `json:"changed_by"`
+}
+
 const (
 	DefaultSyncTargetKey = "cloud"
 
@@ -524,18 +575,59 @@ func (s *Store) migrate() error {
 				updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
 			);
 
-			CREATE TABLE IF NOT EXISTS sync_mutations (
-				seq         INTEGER PRIMARY KEY AUTOINCREMENT,
-				target_key  TEXT NOT NULL,
-				entity      TEXT NOT NULL,
-				entity_key  TEXT NOT NULL,
-				op          TEXT NOT NULL,
-				payload     TEXT NOT NULL,
-				source      TEXT NOT NULL DEFAULT 'local',
-				occurred_at TEXT NOT NULL DEFAULT (datetime('now')),
-				acked_at    TEXT,
-				FOREIGN KEY (target_key) REFERENCES sync_state(target_key)
-			);
+		CREATE TABLE IF NOT EXISTS sync_mutations (
+			seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+			target_key  TEXT NOT NULL,
+			entity      TEXT NOT NULL,
+			entity_key  TEXT NOT NULL,
+			op          TEXT NOT NULL,
+			payload     TEXT NOT NULL,
+			source      TEXT NOT NULL DEFAULT 'local',
+			occurred_at TEXT NOT NULL DEFAULT (datetime('now')),
+			acked_at    TEXT,
+			FOREIGN KEY (target_key) REFERENCES sync_state(target_key)
+		);
+
+		CREATE TABLE IF NOT EXISTS skills (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			name         TEXT    NOT NULL UNIQUE,
+			display_name TEXT    NOT NULL,
+			category     TEXT    NOT NULL DEFAULT '',
+			stack        TEXT    NOT NULL DEFAULT '',
+			triggers     TEXT    NOT NULL DEFAULT '',
+			content      TEXT    NOT NULL,
+			version      INTEGER NOT NULL DEFAULT 1,
+			is_active    INTEGER NOT NULL DEFAULT 1,
+			changed_by   TEXT    NOT NULL DEFAULT 'system',
+			created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+			updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+		);
+		CREATE INDEX IF NOT EXISTS idx_skills_name     ON skills(name);
+		CREATE INDEX IF NOT EXISTS idx_skills_stack    ON skills(stack);
+		CREATE INDEX IF NOT EXISTS idx_skills_category ON skills(category);
+		CREATE INDEX IF NOT EXISTS idx_skills_active   ON skills(is_active);
+
+		CREATE TABLE IF NOT EXISTS skill_versions (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			skill_id   INTEGER NOT NULL,
+			version    INTEGER NOT NULL,
+			content    TEXT    NOT NULL,
+			changed_by TEXT    NOT NULL DEFAULT 'system',
+			created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (skill_id) REFERENCES skills(id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_skill_versions_skill ON skill_versions(skill_id, version DESC);
+
+		CREATE VIRTUAL TABLE IF NOT EXISTS skills_fts USING fts5(
+			name,
+			display_name,
+			triggers,
+			content,
+			stack,
+			category,
+			content='skills',
+			content_rowid='id'
+		);
 		`
 	if _, err := s.execHook(s.db, schema); err != nil {
 		return err
@@ -693,6 +785,36 @@ func (s *Store) migrate() error {
 			END;
 		`
 		if _, err := s.execHook(s.db, promptTriggers); err != nil {
+			return err
+		}
+	}
+
+	// Skills FTS triggers (separate idempotent check)
+	var skillsTrigger string
+	err = s.db.QueryRow(
+		"SELECT name FROM sqlite_master WHERE type='trigger' AND name='skills_fts_insert'",
+	).Scan(&skillsTrigger)
+
+	if err == sql.ErrNoRows {
+		skillsTriggers := `
+			CREATE TRIGGER skills_fts_insert AFTER INSERT ON skills BEGIN
+				INSERT INTO skills_fts(rowid, name, display_name, triggers, content, stack, category)
+				VALUES (new.id, new.name, new.display_name, new.triggers, new.content, new.stack, new.category);
+			END;
+
+			CREATE TRIGGER skills_fts_delete AFTER DELETE ON skills BEGIN
+				INSERT INTO skills_fts(skills_fts, rowid, name, display_name, triggers, content, stack, category)
+				VALUES ('delete', old.id, old.name, old.display_name, old.triggers, old.content, old.stack, old.category);
+			END;
+
+			CREATE TRIGGER skills_fts_update AFTER UPDATE ON skills BEGIN
+				INSERT INTO skills_fts(skills_fts, rowid, name, display_name, triggers, content, stack, category)
+				VALUES ('delete', old.id, old.name, old.display_name, old.triggers, old.content, old.stack, old.category);
+				INSERT INTO skills_fts(rowid, name, display_name, triggers, content, stack, category)
+				VALUES (new.id, new.name, new.display_name, new.triggers, new.content, new.stack, new.category);
+			END;
+		`
+		if _, err := s.execHook(s.db, skillsTriggers); err != nil {
 			return err
 		}
 	}
@@ -3555,4 +3677,271 @@ func ClassifyTool(toolName string) string {
 // Now returns the current time formatted for SQLite.
 func Now() string {
 	return time.Now().UTC().Format("2006-01-02 15:04:05")
+}
+
+// ─── Skills Store Methods ─────────────────────────────────────────────────────
+
+// CreateSkill inserts a new skill row and an initial skill_versions row (v1).
+// Returns an error if a skill with the same name already exists.
+func (s *Store) CreateSkill(params CreateSkillParams) (*Skill, error) {
+	changedBy := params.ChangedBy
+	if changedBy == "" {
+		changedBy = "system"
+	}
+
+	var skill *Skill
+	err := s.withTx(func(tx *sql.Tx) error {
+		res, err := s.execHook(tx, `
+			INSERT INTO skills (name, display_name, category, stack, triggers, content, version, is_active, changed_by)
+			VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)`,
+			params.Name, params.DisplayName, params.Category, params.Stack, params.Triggers, params.Content, changedBy,
+		)
+		if err != nil {
+			return err
+		}
+		skillID, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+
+		// Insert initial version row
+		if _, err := s.execHook(tx, `
+			INSERT INTO skill_versions (skill_id, version, content, changed_by)
+			VALUES (?, 1, ?, ?)`,
+			skillID, params.Content, changedBy,
+		); err != nil {
+			return err
+		}
+
+		// Read back the full row
+		rows, err := s.queryHook(tx, `
+			SELECT id, name, display_name, category, stack, triggers, content, version, is_active, changed_by, created_at, updated_at
+			FROM skills WHERE id = ?`, skillID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		if rows.Next() {
+			var sk Skill
+			var isActive int
+			if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Category, &sk.Stack, &sk.Triggers, &sk.Content, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+				return err
+			}
+			sk.IsActive = isActive == 1
+			skill = &sk
+		}
+		return rows.Err()
+	})
+	return skill, err
+}
+
+// UpdateSkill increments the version, updates the skills row, and inserts a new skill_versions row.
+// Returns an error if the skill is not found.
+func (s *Store) UpdateSkill(name string, params UpdateSkillParams) (*Skill, error) {
+	changedBy := params.ChangedBy
+	if changedBy == "" {
+		changedBy = "system"
+	}
+
+	var skill *Skill
+	err := s.withTx(func(tx *sql.Tx) error {
+		// Check it exists and get current version
+		var skillID int64
+		var currentVersion int
+		err := tx.QueryRow(`SELECT id, version FROM skills WHERE name = ?`, name).Scan(&skillID, &currentVersion)
+		if err != nil {
+			return err // sql.ErrNoRows when not found
+		}
+
+		newVersion := currentVersion + 1
+
+		// Build dynamic SET clause
+		setClauses := []string{"version = ?", "changed_by = ?", "updated_at = datetime('now')"}
+		args := []any{newVersion, changedBy}
+
+		if params.DisplayName != nil {
+			setClauses = append(setClauses, "display_name = ?")
+			args = append(args, *params.DisplayName)
+		}
+		if params.Category != nil {
+			setClauses = append(setClauses, "category = ?")
+			args = append(args, *params.Category)
+		}
+		if params.Stack != nil {
+			setClauses = append(setClauses, "stack = ?")
+			args = append(args, *params.Stack)
+		}
+		if params.Triggers != nil {
+			setClauses = append(setClauses, "triggers = ?")
+			args = append(args, *params.Triggers)
+		}
+		if params.Content != nil {
+			setClauses = append(setClauses, "content = ?")
+			args = append(args, *params.Content)
+		}
+		args = append(args, skillID)
+
+		updateSQL := "UPDATE skills SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
+		if _, err := s.execHook(tx, updateSQL, args...); err != nil {
+			return err
+		}
+
+		// Read back the content for version row
+		var content string
+		if err := tx.QueryRow(`SELECT content FROM skills WHERE id = ?`, skillID).Scan(&content); err != nil {
+			return err
+		}
+
+		// Insert new version row
+		if _, err := s.execHook(tx, `
+			INSERT INTO skill_versions (skill_id, version, content, changed_by)
+			VALUES (?, ?, ?, ?)`,
+			skillID, newVersion, content, changedBy,
+		); err != nil {
+			return err
+		}
+
+		// Read back full row
+		rows, err := s.queryHook(tx, `
+			SELECT id, name, display_name, category, stack, triggers, content, version, is_active, changed_by, created_at, updated_at
+			FROM skills WHERE id = ?`, skillID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		if rows.Next() {
+			var sk Skill
+			var isActive int
+			if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Category, &sk.Stack, &sk.Triggers, &sk.Content, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+				return err
+			}
+			sk.IsActive = isActive == 1
+			skill = &sk
+		}
+		return rows.Err()
+	})
+	return skill, err
+}
+
+// GetSkill returns the full skill (including content) by name.
+// Returns nil, sql.ErrNoRows if not found.
+func (s *Store) GetSkill(name string) (*Skill, error) {
+	rows, err := s.queryHook(s.db, `
+		SELECT id, name, display_name, category, stack, triggers, content, version, is_active, changed_by, created_at, updated_at
+		FROM skills WHERE name = ?`, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		var sk Skill
+		var isActive int
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Category, &sk.Stack, &sk.Triggers, &sk.Content, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+			return nil, err
+		}
+		sk.IsActive = isActive == 1
+		return &sk, rows.Err()
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return nil, sql.ErrNoRows
+}
+
+// ListSkills returns active skills filtered by stack/category (metadata only — no content field).
+// When params.Query is non-empty, uses FTS5 MATCH on skills_fts.
+func (s *Store) ListSkills(params ListSkillsParams) ([]Skill, error) {
+	var sqlQ string
+	var args []any
+
+	if params.Query != "" {
+		// FTS5 path
+		ftsQuery := sanitizeFTS(params.Query)
+		sqlQ = `
+			SELECT sk.id, sk.name, sk.display_name, sk.category, sk.stack, sk.triggers, '' as content,
+			       sk.version, sk.is_active, sk.changed_by, sk.created_at, sk.updated_at
+			FROM skills_fts fts
+			JOIN skills sk ON sk.id = fts.rowid
+			WHERE skills_fts MATCH ? AND sk.is_active = 1`
+		args = []any{ftsQuery}
+
+		if params.Stack != "" {
+			sqlQ += " AND sk.stack = ?"
+			args = append(args, params.Stack)
+		}
+		if params.Category != "" {
+			sqlQ += " AND sk.category = ?"
+			args = append(args, params.Category)
+		}
+		sqlQ += " ORDER BY fts.rank"
+	} else {
+		// Plain SELECT path (metadata only)
+		sqlQ = `
+			SELECT id, name, display_name, category, stack, triggers, '' as content,
+			       version, is_active, changed_by, created_at, updated_at
+			FROM skills WHERE is_active = 1`
+
+		if params.Stack != "" {
+			sqlQ += " AND stack = ?"
+			args = append(args, params.Stack)
+		}
+		if params.Category != "" {
+			sqlQ += " AND category = ?"
+			args = append(args, params.Category)
+		}
+		sqlQ += " ORDER BY name ASC"
+	}
+
+	rows, err := s.queryItHook(s.db, sqlQ, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []Skill
+	for rows.Next() {
+		var sk Skill
+		var isActive int
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Category, &sk.Stack, &sk.Triggers, &sk.Content, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+			return nil, err
+		}
+		sk.IsActive = isActive == 1
+		results = append(results, sk)
+	}
+	return results, rows.Err()
+}
+
+// GetSkillVersions returns the version history for a skill, ordered by version DESC.
+// Returns an empty slice (not an error) if the skill does not exist.
+func (s *Store) GetSkillVersions(name string) ([]SkillVersion, error) {
+	sqlQ := `
+		SELECT sv.id, sv.skill_id, sv.version, sv.content, sv.changed_by, sv.created_at
+		FROM skill_versions sv
+		JOIN skills sk ON sk.id = sv.skill_id
+		WHERE sk.name = ?
+		ORDER BY sv.version DESC`
+
+	rows, err := s.queryItHook(s.db, sqlQ, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []SkillVersion
+	for rows.Next() {
+		var sv SkillVersion
+		if err := rows.Scan(&sv.ID, &sv.SkillID, &sv.Version, &sv.Content, &sv.ChangedBy, &sv.CreatedAt); err != nil {
+			return nil, err
+		}
+		results = append(results, sv)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Return empty slice (not nil) when no rows found
+	if results == nil {
+		results = []SkillVersion{}
+	}
+	return results, nil
 }
