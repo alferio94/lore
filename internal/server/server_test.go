@@ -396,6 +396,126 @@ func TestOnWriteNotCalledOnFailedWrites(t *testing.T) {
 	}
 }
 
+// ─── SetMCPHandler Tests ─────────────────────────────────────────────────────
+
+// TestSetMCPHandlerMountsAtMCP verifies that SetMCPHandler registers
+// the provided handler at the /mcp path on the server's mux.
+func TestSetMCPHandlerMountsAtMCP(t *testing.T) {
+	srv := New(newServerTestStore(t), 0)
+
+	// A simple stub handler that writes 200 + a marker body.
+	stub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("mcp-ok"))
+	})
+
+	srv.SetMCPHandler(stub)
+
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from /mcp, got %d", rec.Code)
+	}
+	if body := rec.Body.String(); body != "mcp-ok" {
+		t.Fatalf("expected body %q, got %q", "mcp-ok", body)
+	}
+}
+
+// TestSetMCPHandlerPostRoutedCorrectly verifies that POST requests to /mcp
+// are also dispatched to the registered MCP handler.
+func TestSetMCPHandlerPostRoutedCorrectly(t *testing.T) {
+	srv := New(newServerTestStore(t), 0)
+
+	stub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("mcp-post-ok"))
+	})
+
+	srv.SetMCPHandler(stub)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from POST /mcp, got %d", rec.Code)
+	}
+	if body := rec.Body.String(); body != "mcp-post-ok" {
+		t.Fatalf("expected body %q, got %q", "mcp-post-ok", body)
+	}
+}
+
+// TestRESTRoutesUnaffectedAfterMCPMount verifies that existing REST endpoints
+// continue to work correctly after SetMCPHandler is called — no routing conflict.
+func TestRESTRoutesUnaffectedAfterMCPMount(t *testing.T) {
+	srv := New(newServerTestStore(t), 0)
+
+	// Mount MCP handler first.
+	stub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("mcp-ok"))
+	})
+	srv.SetMCPHandler(stub)
+
+	h := srv.Handler()
+
+	// GET /health must still return 200 with {"status":"ok"}.
+	healthReq := httptest.NewRequest(http.MethodGet, "/health", nil)
+	healthRec := httptest.NewRecorder()
+	h.ServeHTTP(healthRec, healthReq)
+
+	if healthRec.Code != http.StatusOK {
+		t.Fatalf("GET /health: expected 200 after MCP mount, got %d", healthRec.Code)
+	}
+	var healthBody map[string]any
+	if err := json.NewDecoder(healthRec.Body).Decode(&healthBody); err != nil {
+		t.Fatalf("GET /health: decode response: %v", err)
+	}
+	if healthBody["status"] != "ok" {
+		t.Fatalf("GET /health: expected status=ok, got %v", healthBody["status"])
+	}
+
+	// GET /observations/recent must still return 200 (empty list is fine).
+	obsReq := httptest.NewRequest(http.MethodGet, "/observations/recent", nil)
+	obsRec := httptest.NewRecorder()
+	h.ServeHTTP(obsRec, obsReq)
+
+	if obsRec.Code != http.StatusOK {
+		t.Fatalf("GET /observations/recent: expected 200 after MCP mount, got %d", obsRec.Code)
+	}
+
+	// GET /sync/status must still return 200 (no provider configured → enabled:false).
+	syncReq := httptest.NewRequest(http.MethodGet, "/sync/status", nil)
+	syncRec := httptest.NewRecorder()
+	h.ServeHTTP(syncRec, syncReq)
+
+	if syncRec.Code != http.StatusOK {
+		t.Fatalf("GET /sync/status: expected 200 after MCP mount, got %d", syncRec.Code)
+	}
+	var syncBody map[string]any
+	if err := json.NewDecoder(syncRec.Body).Decode(&syncBody); err != nil {
+		t.Fatalf("GET /sync/status: decode response: %v", err)
+	}
+	if syncBody["enabled"] != false {
+		t.Fatalf("GET /sync/status: expected enabled=false, got %v", syncBody["enabled"])
+	}
+
+	// GET /mcp must still hit the MCP handler (not a REST route).
+	mcpReq := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	mcpRec := httptest.NewRecorder()
+	h.ServeHTTP(mcpRec, mcpReq)
+
+	if mcpRec.Code != http.StatusOK {
+		t.Fatalf("GET /mcp: expected 200, got %d", mcpRec.Code)
+	}
+	if body := mcpRec.Body.String(); body != "mcp-ok" {
+		t.Fatalf("GET /mcp: expected mcp handler body, got %q", body)
+	}
+}
+
 func TestHandleStatsReturnsInternalServerErrorOnLoaderError(t *testing.T) {
 	prev := loadServerStats
 	loadServerStats = func(s *store.Store) (*store.Stats, error) {

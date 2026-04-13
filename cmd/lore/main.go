@@ -63,6 +63,7 @@ var (
 	newMCPServerWithConfig = mcp.NewServerWithConfig
 	resolveMCPTools        = mcp.ResolveTools
 	serveMCP               = mcpserver.ServeStdio
+	newMCPHTTPHandler      = mcp.NewHTTPHandler
 
 	// detectProject is injectable for testing; wraps project.DetectProject.
 	detectProject = project.DetectProject
@@ -207,6 +208,21 @@ func cmdServe(cfg store.Config) {
 	defer s.Close()
 
 	srv := newHTTPServer(s, port)
+
+	// Project detection chain: LORE_PROJECT env → git detection.
+	// (matches the same chain used by cmdMCP for consistency)
+	projectHint := os.Getenv("LORE_PROJECT")
+	if projectHint == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			projectHint = detectProject(cwd)
+		}
+	}
+	projectHint, _ = store.NormalizeProject(projectHint)
+
+	// Mount MCP HTTP handler at /mcp.
+	mcpHandler := newMCPHTTPHandler(s, projectHint)
+	srv.SetMCPHandler(mcpHandler)
+	log.Printf("[lore] MCP HTTP endpoint: http://127.0.0.1:%d/mcp", port)
 
 	// Graceful shutdown on SIGINT/SIGTERM.
 	sigCh := make(chan os.Signal, 1)

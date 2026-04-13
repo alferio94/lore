@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -921,6 +923,98 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdSetup() })
 		assertFatal(t, stderr, recovered, "forced setup error")
 	})
+}
+
+// ─── Task 3.3: cmdServe MCP wiring test ──────────────────────────────────────
+
+// TestCmdServeWiresMCPHandler verifies that when cmdServe runs:
+//  1. newMCPHTTPHandler is called (the injectable var from task 1.5) with a
+//     non-nil store and a string project hint.
+//  2. SetMCPHandler is called on the HTTP server — verified by sending a request
+//     to /mcp on the captured server and asserting it does NOT return 404.
+func TestCmdServeWiresMCPHandler(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+	stubExitWithPanic(t)
+
+	// Capture the handler provided to newMCPHTTPHandler.
+	var mcpHandlerCalled bool
+	var capturedSrv *engramsrv.Server
+
+	oldMCPHTTPHandler := newMCPHTTPHandler
+	t.Cleanup(func() { newMCPHTTPHandler = oldMCPHTTPHandler })
+	// Inject a real stub handler that returns 200 OK for any request.
+	newMCPHTTPHandler = func(s *store.Store, projectHint string) http.Handler {
+		mcpHandlerCalled = true
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+	}
+
+	// Capture the server returned by newHTTPServer so we can query it later.
+	oldNewHTTPServer := newHTTPServer
+	t.Cleanup(func() { newHTTPServer = oldNewHTTPServer })
+	newHTTPServer = func(s *store.Store, port int) *engramsrv.Server {
+		srv := engramsrv.New(s, port)
+		capturedSrv = srv
+		return srv
+	}
+
+	// Prevent actual HTTP listen; return immediately.
+	startHTTP = func(_ *engramsrv.Server) error { return nil }
+
+	withArgs(t, "lore", "serve")
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdServe(cfg) })
+	if recovered != nil {
+		t.Fatalf("expected clean run, got panic=%v stderr=%q", recovered, stderr)
+	}
+
+	// Assertion 1: newMCPHTTPHandler was called during cmdServe.
+	if !mcpHandlerCalled {
+		t.Fatal("expected newMCPHTTPHandler to be called during cmdServe, but it was not")
+	}
+
+	// Assertion 2: the server's /mcp route responds (not 404).
+	if capturedSrv == nil {
+		t.Fatal("expected newHTTPServer to be called and server captured")
+	}
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	rec := httptest.NewRecorder()
+	capturedSrv.Handler().ServeHTTP(rec, req)
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("expected /mcp to be mounted (not 404), got %d", rec.Code)
+	}
+}
+
+// TestCmdServeUsesProjectHintFromEnv verifies that the LORE_PROJECT env var
+// is passed to newMCPHTTPHandler as the projectHint.
+func TestCmdServeUsesProjectHintFromEnv(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+	stubExitWithPanic(t)
+
+	t.Setenv("LORE_PROJECT", "my-env-project")
+
+	var capturedHint string
+	oldMCPHTTPHandler := newMCPHTTPHandler
+	t.Cleanup(func() { newMCPHTTPHandler = oldMCPHTTPHandler })
+	newMCPHTTPHandler = func(s *store.Store, projectHint string) http.Handler {
+		capturedHint = projectHint
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+	}
+	startHTTP = func(_ *engramsrv.Server) error { return nil }
+
+	withArgs(t, "lore", "serve")
+	_, _, recovered := captureOutputAndRecover(t, func() { cmdServe(cfg) })
+	if recovered != nil {
+		t.Fatalf("unexpected panic: %v", recovered)
+	}
+
+	if capturedHint != "my-env-project" {
+		t.Fatalf("expected projectHint=%q, got %q", "my-env-project", capturedHint)
+	}
 }
 
 func TestCmdMCP(t *testing.T) {

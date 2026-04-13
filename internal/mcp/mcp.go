@@ -16,6 +16,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	projectpkg "github.com/alferio94/lore/internal/project"
@@ -155,6 +156,19 @@ func NewServerWithConfig(s *store.Store, cfg MCPConfig, allowlist map[string]boo
 
 	registerTools(srv, s, cfg, allowlist)
 	return srv
+}
+
+// NewHTTPHandler creates an MCP HTTP handler using StreamableHTTP transport.
+// It registers the same tools as NewServerWithConfig and wraps the MCPServer
+// with a stateless StreamableHTTPServer that implements http.Handler.
+//
+// The returned handler is suitable for mounting on an http.ServeMux at a path
+// like "/mcp". projectHint is used as the default project name when the LLM
+// does not provide one.
+func NewHTTPHandler(st *store.Store, projectHint string) http.Handler {
+	cfg := MCPConfig{DefaultProject: projectHint}
+	mcpSrv := NewServerWithConfig(st, cfg, nil)
+	return server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
 }
 
 // shouldRegister returns true if the tool should be registered given the

@@ -64,6 +64,13 @@ func (s *Server) SetSyncStatus(provider SyncStatusProvider) {
 	s.syncStatus = provider
 }
 
+// SetMCPHandler mounts h on the server's mux at /mcp.
+// It follows the same setter pattern as SetOnWrite and SetSyncStatus,
+// and may be called before or after Start().
+func (s *Server) SetMCPHandler(h http.Handler) {
+	s.mux.Handle("/mcp", h)
+}
+
 // notifyWrite calls the onWrite callback if configured (best-effort, non-blocking).
 func (s *Server) notifyWrite() {
 	if s.onWrite != nil {
