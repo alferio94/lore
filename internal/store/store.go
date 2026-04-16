@@ -170,6 +170,17 @@ type SkillVersion struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type User struct {
+	ID        int64  `json:"id"`
+	Email     string `json:"email"`
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	AvatarURL string `json:"avatar_url"`
+	Provider  string `json:"provider"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
 type ListSkillsParams struct {
 	Stack    string `json:"stack,omitempty"`
 	Category string `json:"category,omitempty"`
@@ -628,6 +639,19 @@ func (s *Store) migrate() error {
 			content='skills',
 			content_rowid='id'
 		);
+
+		CREATE TABLE IF NOT EXISTS users (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			email      TEXT    NOT NULL UNIQUE,
+			name       TEXT    NOT NULL DEFAULT '',
+			role       TEXT    NOT NULL DEFAULT 'viewer',
+			avatar_url TEXT    NOT NULL DEFAULT '',
+			provider   TEXT    NOT NULL DEFAULT '',
+			created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+		);
+		CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+		CREATE INDEX IF NOT EXISTS idx_users_role  ON users(role);
 		`
 	if _, err := s.execHook(s.db, schema); err != nil {
 		return err

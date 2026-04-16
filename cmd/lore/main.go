@@ -13,9 +13,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -26,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alferio94/lore/internal/admin"
 	"github.com/alferio94/lore/internal/mcp"
 	"github.com/alferio94/lore/internal/obsidian"
 	"github.com/alferio94/lore/internal/project"
@@ -194,9 +198,12 @@ func cmdServe(cfg store.Config) {
 			port = n
 		}
 	}
-	// Allow: lore serve 8080
-	if len(os.Args) > 2 {
-		if n, err := strconv.Atoi(os.Args[2]); err == nil {
+	// Allow: lore serve 8080  and  lore serve --dev-auth
+	devAuth := false
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] == "--dev-auth" {
+			devAuth = true
+		} else if n, err := strconv.Atoi(os.Args[i]); err == nil {
 			port = n
 		}
 	}
@@ -223,6 +230,47 @@ func cmdServe(cfg store.Config) {
 	mcpHandler := newMCPHTTPHandler(s, projectHint)
 	srv.SetMCPHandler(mcpHandler)
 	log.Printf("[lore] MCP HTTP endpoint: http://127.0.0.1:%d/mcp", port)
+
+	// ── Admin web panel ──────────────────────────────────────────────────────
+	// Build AdminConfig from environment variables.
+	jwtSecret := []byte(os.Getenv("LORE_JWT_SECRET"))
+	if len(jwtSecret) == 0 {
+		// Auto-generate a random 32-byte secret for this process lifetime.
+		// Sessions will be invalidated on restart.  Set LORE_JWT_SECRET to
+		// persist sessions across restarts.
+		jwtSecret = adminGenerateSecret()
+		log.Printf("[lore] WARN: LORE_JWT_SECRET is not set — generated a random JWT secret; admin sessions will not survive restarts")
+	}
+
+	adminCfg := admin.AdminConfig{
+		Store:              s,
+		JWTSecret:          jwtSecret,
+		DevAuth:            devAuth,
+		BaseURL:            fmt.Sprintf("http://127.0.0.1:%d", port),
+		GoogleClientID:     os.Getenv("LORE_GOOGLE_CLIENT_ID"),
+		GoogleClientSecret: os.Getenv("LORE_GOOGLE_CLIENT_SECRET"),
+		GitHubClientID:     os.Getenv("LORE_GITHUB_CLIENT_ID"),
+		GitHubClientSecret: os.Getenv("LORE_GITHUB_CLIENT_SECRET"),
+	}
+
+	// Warn when OAuth providers have incomplete configuration.
+	if adminCfg.GoogleClientID == "" || adminCfg.GoogleClientSecret == "" {
+		log.Printf("[lore] WARN: Google OAuth not configured (LORE_GOOGLE_CLIENT_ID / LORE_GOOGLE_CLIENT_SECRET unset); Google login disabled")
+	}
+	if adminCfg.GitHubClientID == "" || adminCfg.GitHubClientSecret == "" {
+		log.Printf("[lore] WARN: GitHub OAuth not configured (LORE_GITHUB_CLIENT_ID / LORE_GITHUB_CLIENT_SECRET unset); GitHub login disabled")
+	}
+
+	// Wire OAuth configs when credentials are present.
+	adminCfg = adminBuildOAuthConfigs(adminCfg)
+
+	// Mount admin routes on the server's mux.
+	mux := srv.Handler().(*http.ServeMux)
+	admin.Mount(mux, adminCfg)
+	log.Printf("[lore] admin panel: http://127.0.0.1:%d/admin/", port)
+	if devAuth {
+		log.Printf("[lore] WARN: --dev-auth is enabled — do NOT use in production")
+	}
 
 	// Graceful shutdown on SIGINT/SIGTERM.
 	sigCh := make(chan os.Signal, 1)
@@ -1700,6 +1748,38 @@ func migrateOrphanedDB(correctDir string) {
 		log.Printf("[lore] migration complete — memories recovered")
 		return
 	}
+}
+
+// adminGenerateSecret generates a cryptographically random 32-byte key and
+// returns it as a []byte.  Used when LORE_JWT_SECRET is not set.
+func adminGenerateSecret() []byte {
+	raw := make([]byte, 16) // 16 bytes → 32 hex chars
+	if _, err := rand.Read(raw); err != nil {
+		// Fall back to a fixed string; log loudly.
+		log.Printf("[lore] WARN: crypto/rand failed (%v); using insecure fallback JWT secret", err)
+		return []byte("lore-insecure-fallback-jwt-secret")
+	}
+	return []byte(hex.EncodeToString(raw))
+}
+
+// adminBuildOAuthConfigs populates cfg.GoogleOAuth and cfg.GithubOAuth when
+// the relevant credential env vars are set.
+func adminBuildOAuthConfigs(cfg admin.AdminConfig) admin.AdminConfig {
+	if cfg.GoogleClientID != "" && cfg.GoogleClientSecret != "" {
+		cfg.GoogleOAuth = admin.NewGoogleOAuthConfig(
+			cfg.GoogleClientID,
+			cfg.GoogleClientSecret,
+			cfg.BaseURL+"/admin/auth/callback/google",
+		)
+	}
+	if cfg.GitHubClientID != "" && cfg.GitHubClientSecret != "" {
+		cfg.GithubOAuth = admin.NewGitHubOAuthConfig(
+			cfg.GitHubClientID,
+			cfg.GitHubClientSecret,
+			cfg.BaseURL+"/admin/auth/callback/github",
+		)
+	}
+	return cfg
 }
 
 func truncate(s string, max int) string {
