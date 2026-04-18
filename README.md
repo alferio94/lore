@@ -1,10 +1,10 @@
 <p align="center">
-  <img width="1024" height="340" alt="image" src="https://github.com/user-attachments/assets/32ed8985-841d-49c3-81f7-2aabc7c7c564" />
+  <img width="1024" height="340" alt="Lore — Knowledge Hub for AI Agent Teams" src="https://github.com/user-attachments/assets/30bb455f-9ea4-48b2-bf71-042dcd82321e" />
 </p>
 
 <p align="center">
-  <strong>Persistent memory for AI coding agents</strong><br>
-  <em>Agent-agnostic. Single binary. Zero dependencies.</em>
+  <strong>The knowledge hub for AI agent teams</strong><br>
+  <em>Shared memory. Team skills. Project state. One binary.</em>
 </p>
 
 <p align="center">
@@ -20,17 +20,36 @@
 
 > **lore** `/lɔːr/` — *noun*: the accumulated knowledge, traditions, and memory of a community or craft.
 
-Your AI coding agent forgets everything when the session ends. Lore gives it a brain.
+Your agents forget everything when the session ends. Your team's conventions live scattered in local files. New devs spend weeks getting up to speed. **Lore fixes all of that.**
 
-A **Go binary** with SQLite + FTS5 full-text search, exposed via CLI, HTTP API, MCP server, and an interactive TUI. Works with **any agent** that supports MCP — Claude Code, OpenCode, Gemini CLI, Codex, VS Code (Copilot), Antigravity, Cursor, Windsurf, or anything else.
+A **Go binary** that acts as the single source of technical truth for an AI-powered team. Agents connect via MCP — over stdio locally or HTTP/SSE remotely — and access shared memory, team skills, and project state. Works with **any MCP-compatible agent**: Claude Code, OpenCode, Gemini CLI, Codex, Cursor, Windsurf, VS Code, and more.
 
 ```
-Agent (Claude Code / OpenCode / Gemini CLI / Codex / VS Code / Antigravity / ...)
-    ↓ MCP stdio
-Lore (single Go binary)
-    ↓
-SQLite + FTS5 (~/.lore/lore.db)
+Claude Code (dev)     Cursor (dev)     Claude Desktop (PM)
+        │                  │                  │
+        └──────────────────┴──────────────────┘
+                           │ MCP (HTTP/SSE or stdio)
+                    ┌──────┴──────┐
+                    │    LORE     │
+                    ├─────────────┤
+                    │   Skills    │  ← team conventions, stack rules, ADRs
+                    │   Memory    │  ← decisions, bugfixes, discoveries
+                    │   Projects  │  ← derived state from session summaries
+                    └──────┬──────┘
+                           │
+                    SQLite + FTS5
+                    (~/.lore/lore.db)
 ```
+
+## What Lore Does
+
+| Layer | What it stores | Who writes |
+|-------|---------------|------------|
+| **Skills** | Team conventions, architecture rules, workflow standards, ADRs — per stack | Tech leads via Web Admin |
+| **Memory** | Decisions, bugfixes, discoveries, session summaries — scoped per project | Agents via MCP |
+| **Projects** | State derived from session summaries — what's done, what's next, velocity | Auto-derived |
+
+Agents never see each other's work directly. They see what the team has decided is important enough to persist. **The knowledge lives in Lore, not in the agent.**
 
 ## Quick Start
 
@@ -42,7 +61,7 @@ brew install alferio94/tap/lore
 
 Windows, Linux, and other install methods → [docs/INSTALLATION.md](docs/INSTALLATION.md)
 
-### Setup Your Agent
+### Connect Your Agent
 
 | Agent | One-liner |
 |-------|-----------|
@@ -60,35 +79,60 @@ That's it. No Node.js, no Python, no Docker. **One binary, one SQLite file.**
 ## How It Works
 
 ```
-1. Agent completes significant work (bugfix, architecture decision, etc.)
-2. Agent calls mem_save → title, type, What/Why/Where/Learned
-3. Lore persists to SQLite with FTS5 indexing
-4. Next session: agent searches memory, gets relevant context
+1. Tech lead writes a skill (Angular conventions, API standards, PR policy)
+2. Agent calls lore_list_skills → gets name + triggers (lightweight)
+3. Agent calls lore_get_skill(name) → gets full content when needed
+4. Agent does significant work (bugfix, decision, discovery)
+5. Agent calls lore_save → persisted with FTS5 indexing
+6. Next session, next agent: lore_search / lore_context → instant context
 ```
 
 Full details on session lifecycle, topic keys, and memory hygiene → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## MCP Tools
 
+### Memory (read/write)
+
 | Tool | Purpose |
 |------|---------|
-| `mem_save` | Save observation |
-| `mem_update` | Update by ID |
-| `mem_delete` | Soft or hard delete |
-| `mem_suggest_topic_key` | Stable key for evolving topics |
-| `mem_search` | Full-text search |
-| `mem_session_summary` | End-of-session save |
-| `mem_context` | Recent session context |
-| `mem_timeline` | Chronological drill-in |
-| `mem_get_observation` | Full content by ID |
-| `mem_save_prompt` | Save user prompt |
-| `mem_stats` | Memory statistics |
-| `mem_session_start` | Register session start |
-| `mem_session_end` | Mark session complete |
-| `mem_capture_passive` | Extract learnings from text output |
-| `mem_merge_projects` | Merge project name variants (admin) |
+| `lore_save` | Save observation (decision, bugfix, discovery, etc.) |
+| `lore_update` | Update by ID |
+| `lore_search` | Full-text search across all observations |
+| `lore_context` | Recent session context for a project |
+| `lore_session_summary` | End-of-session structured save |
+| `lore_get_observation` | Full content by ID (untruncated) |
+| `lore_suggest_topic_key` | Stable key for evolving topics |
+| `lore_save_prompt` | Save user prompt |
+| `lore_session_start` | Register session start |
+| `lore_session_end` | Mark session complete |
+| `lore_capture_passive` | Extract learnings from text output |
+| `lore_timeline` | Chronological drill-in |
+| `lore_stats` | Memory statistics |
+
+### Skills (read-only via MCP)
+
+| Tool | Purpose |
+|------|---------|
+| `lore_list_skills` | List skills with triggers — lightweight, low tokens |
+| `lore_get_skill` | Full skill content by name |
+
+Skills are **read-only via MCP**. Agents consume them, never write them. Skills are created and managed by tech leads through the Web Admin.
 
 Full tool reference → [docs/ARCHITECTURE.md#mcp-tools](docs/ARCHITECTURE.md#mcp-tools)
+
+## Skills System
+
+Lore serves team knowledge as **skills** — structured markdown documents that agents load on demand based on triggers.
+
+```
+Agent: "I'm about to write an Angular component"
+  → lore_list_skills(stack: "angular")
+  → [{name: "angular-conventions", triggers: "When writing Angular components..."}]
+  → lore_get_skill("angular-conventions")
+  → Full conventions doc injected into context
+```
+
+Skills have version history, FTS5 search, and are managed through the Web Admin (coming in Phase 4). → [docs/ARCHITECTURE.md#skills](docs/ARCHITECTURE.md#skills)
 
 ## Terminal UI
 
@@ -123,7 +167,7 @@ Full sync documentation → [DOCS.md](DOCS.md)
 | Command | Description |
 |---------|-------------|
 | `lore setup [agent]` | Install agent integration |
-| `lore serve [port]` | Start HTTP API (default: 7437) |
+| `lore serve [port]` | Start HTTP API + MCP over HTTP/SSE (default: 7438) |
 | `lore mcp` | Start MCP server (stdio). Accepts `--project` or `LORE_PROJECT` |
 | `lore tui` | Launch terminal UI |
 | `lore search <query>` | Search memories |
@@ -138,6 +182,19 @@ Full sync documentation → [DOCS.md](DOCS.md)
 | `lore projects consolidate` | Interactive merge of similar project names (`--all`, `--dry-run`) |
 | `lore projects prune` | Remove projects with 0 observations (`--dry-run`) |
 | `lore version` | Show version |
+
+## Roadmap
+
+| Phase | Status | What |
+|-------|--------|------|
+| 0 — Fork & rebrand | ✅ Done | Full rebrand from engram → lore, Go module, binary, plugins |
+| 1 — MCP over HTTP/SSE | ✅ Done | Remote agents connect via HTTP — foundation for team-hub mode |
+| 2 — Tool rename | ✅ Done | `mem_*` → `lore_*` to coexist with local engram |
+| 3 — Skills system | ✅ Done | Skills tables, store CRUD, FTS5, MCP tools + resources |
+| 4 — Web Admin | 🔄 In Progress | OAuth2 + JWT + RBAC, skills editor, project dashboard |
+| 5 — Docker + deployment | 🔲 Planned | Multi-stage Dockerfile, Kubernetes manifests, one instance per client |
+| 6 — Agent integration | 🔲 Planned | CLAUDE.md / AGENTS.md templates, `sdd-init` reads skills from hub |
+| 7 — Pilot | 🔲 Planned | Real-world validation: 2 agents, 2 roles, 2 weeks |
 
 ## Documentation
 
@@ -157,4 +214,4 @@ MIT
 
 ---
 
-**Inspired by [claude-mem](https://github.com/thedotmack/claude-mem)** — but agent-agnostic, simpler, and built different.
+Built on top of [engram](https://github.com/alferio94/lore) — the personal persistent memory layer that powers Lore's core. Inspired by [claude-mem](https://github.com/thedotmack/claude-mem).
