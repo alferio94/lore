@@ -64,12 +64,12 @@ func (h *adminHandler) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 
 // createSkillRequest is the JSON payload for POST /admin/api/skills.
 type createSkillRequest struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Category    string `json:"category"`
-	Stack       string `json:"stack"`
-	Triggers    string `json:"triggers"`
-	Content     string `json:"content"`
+	Name        string  `json:"name"`
+	DisplayName string  `json:"display_name"`
+	StackIDs    []int64 `json:"stack_ids"`
+	CategoryIDs []int64 `json:"category_ids"`
+	Triggers    string  `json:"triggers"`
+	Content     string  `json:"content"`
 }
 
 // ─── handleCreateSkill ────────────────────────────────────────────────────────
@@ -110,8 +110,8 @@ func (h *adminHandler) handleCreateSkill(w http.ResponseWriter, r *http.Request)
 	skill, err := h.cfg.Store.CreateSkill(store.CreateSkillParams{
 		Name:        req.Name,
 		DisplayName: req.DisplayName,
-		Category:    req.Category,
-		Stack:       req.Stack,
+		StackIDs:    req.StackIDs,
+		CategoryIDs: req.CategoryIDs,
 		Triggers:    req.Triggers,
 		Content:     req.Content,
 		ChangedBy:   changedBy,
@@ -134,17 +134,17 @@ func (h *adminHandler) handleCreateSkill(w http.ResponseWriter, r *http.Request)
 // updateSkillRequest is the JSON payload for PUT /admin/api/skills/{name}.
 // All fields are optional pointers — only provided fields are updated.
 type updateSkillRequest struct {
-	DisplayName *string `json:"display_name"`
-	Category    *string `json:"category"`
-	Stack       *string `json:"stack"`
-	Triggers    *string `json:"triggers"`
-	Content     *string `json:"content"`
+	DisplayName *string  `json:"display_name"`
+	StackIDs    *[]int64 `json:"stack_ids"`
+	CategoryIDs *[]int64 `json:"category_ids"`
+	Triggers    *string  `json:"triggers"`
+	Content     *string  `json:"content"`
 }
 
 // hasAnyField returns true if at least one field in the request is non-nil.
 func (u *updateSkillRequest) hasAnyField() bool {
-	return u.DisplayName != nil || u.Category != nil ||
-		u.Stack != nil || u.Triggers != nil || u.Content != nil
+	return u.DisplayName != nil || u.StackIDs != nil ||
+		u.CategoryIDs != nil || u.Triggers != nil || u.Content != nil
 }
 
 // ─── handleUpdateSkill ────────────────────────────────────────────────────────
@@ -178,8 +178,8 @@ func (h *adminHandler) handleUpdateSkill(w http.ResponseWriter, r *http.Request)
 
 	skill, err := h.cfg.Store.UpdateSkill(name, store.UpdateSkillParams{
 		DisplayName: req.DisplayName,
-		Category:    req.Category,
-		Stack:       req.Stack,
+		StackIDs:    req.StackIDs,
+		CategoryIDs: req.CategoryIDs,
 		Triggers:    req.Triggers,
 		Content:     req.Content,
 		ChangedBy:   changedBy,

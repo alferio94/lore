@@ -4510,8 +4510,6 @@ func TestCreateSkillHappyPath(t *testing.T) {
 	skill, err := s.CreateSkill(CreateSkillParams{
 		Name:        "test-skill",
 		DisplayName: "Test Skill",
-		Category:    "testing",
-		Stack:       "Go",
 		Triggers:    "when writing tests",
 		Content:     "Use table-driven tests",
 		ChangedBy:   "system",
@@ -4649,13 +4647,15 @@ func TestGetSkillNotFoundReturnsErrNoRows(t *testing.T) {
 	}
 }
 
-// Task 2.7 — TestListSkillsNoFilter + TestListSkillsStackFilter + TestListSkillsCategoryFilter + TestListSkillsExcludesContentField
+// Task 2.7 — TestListSkillsNoFilter + TestListSkillsExcludesContentField
+// Note: StackID/CategoryID filter tests are in TestMigrateSkillsCatalogTables (Phase 1)
+// and will be expanded in Phase 2 once catalog CRUD is implemented.
 func seedSkills(t *testing.T, s *Store) {
 	t.Helper()
 	skills := []CreateSkillParams{
-		{Name: "go-testing", DisplayName: "Go Testing", Category: "testing", Stack: "Go", Content: "test content go", ChangedBy: "system"},
-		{Name: "nestjs-api", DisplayName: "NestJS API", Category: "backend", Stack: "TypeScript", Content: "nestjs content ts", ChangedBy: "system"},
-		{Name: "react-hooks", DisplayName: "React Hooks", Category: "frontend", Stack: "TypeScript", Content: "react hooks content", ChangedBy: "system"},
+		{Name: "go-testing", DisplayName: "Go Testing", Content: "test content go", ChangedBy: "system"},
+		{Name: "nestjs-api", DisplayName: "NestJS API", Content: "nestjs content ts", ChangedBy: "system"},
+		{Name: "react-hooks", DisplayName: "React Hooks", Content: "react hooks content", ChangedBy: "system"},
 	}
 	for _, p := range skills {
 		if _, err := s.CreateSkill(p); err != nil {
@@ -4677,26 +4677,63 @@ func TestListSkillsNoFilter(t *testing.T) {
 	}
 }
 
-func TestListSkillsStackFilter(t *testing.T) {
+func TestListSkillsStackIDFilter(t *testing.T) {
 	s := newTestStore(t)
-	seedSkills(t, s)
 
-	skills, err := s.ListSkills(ListSkillsParams{Stack: "TypeScript"})
+	// Create a stack first
+	res, err := s.db.Exec(`INSERT INTO stacks (name, display_name) VALUES ('typescript', 'TypeScript')`)
 	if err != nil {
-		t.Fatalf("ListSkills stack filter: %v", err)
+		t.Fatalf("insert stack: %v", err)
+	}
+	stackID, _ := res.LastInsertId()
+
+	// Create skills — two with the TypeScript stack, one without
+	sk1, err := s.CreateSkill(CreateSkillParams{Name: "nestjs", DisplayName: "NestJS", Content: "nestjs", StackIDs: []int64{stackID}, ChangedBy: "test"})
+	if err != nil {
+		t.Fatalf("CreateSkill nestjs: %v", err)
+	}
+	sk2, err := s.CreateSkill(CreateSkillParams{Name: "react", DisplayName: "React", Content: "react", StackIDs: []int64{stackID}, ChangedBy: "test"})
+	if err != nil {
+		t.Fatalf("CreateSkill react: %v", err)
+	}
+	if _, err := s.CreateSkill(CreateSkillParams{Name: "go-skill", DisplayName: "Go", Content: "go", ChangedBy: "test"}); err != nil {
+		t.Fatalf("CreateSkill go: %v", err)
+	}
+	_ = sk1
+	_ = sk2
+
+	sid := stackID
+	skills, err := s.ListSkills(ListSkillsParams{StackID: &sid})
+	if err != nil {
+		t.Fatalf("ListSkills StackID filter: %v", err)
 	}
 	if len(skills) != 2 {
 		t.Errorf("expected 2 TypeScript skills, got %d", len(skills))
 	}
 }
 
-func TestListSkillsCategoryFilter(t *testing.T) {
+func TestListSkillsCategoryIDFilter(t *testing.T) {
 	s := newTestStore(t)
-	seedSkills(t, s)
 
-	skills, err := s.ListSkills(ListSkillsParams{Category: "testing"})
+	// Create a category
+	res, err := s.db.Exec(`INSERT INTO categories (name, display_name) VALUES ('testing', 'Testing')`)
 	if err != nil {
-		t.Fatalf("ListSkills category filter: %v", err)
+		t.Fatalf("insert category: %v", err)
+	}
+	catID, _ := res.LastInsertId()
+
+	// Create skills — one with the testing category
+	if _, err := s.CreateSkill(CreateSkillParams{Name: "go-testing", DisplayName: "Go Testing", Content: "go test", CategoryIDs: []int64{catID}, ChangedBy: "test"}); err != nil {
+		t.Fatalf("CreateSkill go-testing: %v", err)
+	}
+	if _, err := s.CreateSkill(CreateSkillParams{Name: "nestjs-api", DisplayName: "NestJS API", Content: "nestjs", ChangedBy: "test"}); err != nil {
+		t.Fatalf("CreateSkill nestjs: %v", err)
+	}
+
+	cid := catID
+	skills, err := s.ListSkills(ListSkillsParams{CategoryID: &cid})
+	if err != nil {
+		t.Fatalf("ListSkills CategoryID filter: %v", err)
 	}
 	if len(skills) != 1 {
 		t.Errorf("expected 1 testing skill, got %d", len(skills))
@@ -4765,6 +4802,386 @@ func TestGetSkillVersionsUnknownSkillReturnsEmptySlice(t *testing.T) {
 	}
 }
 
+// ─── Phase 2: Catalog CRUD tests ─────────────────────────────────────────────
+
+// Task 2.1 [RED] TestStackCRUD — ListStacks, CreateStack, DeleteStack
+func TestStackCRUD(t *testing.T) {
+	t.Run("list empty returns empty slice", func(t *testing.T) {
+		s := newTestStore(t)
+		stacks, err := s.ListStacks()
+		if err != nil {
+			t.Fatalf("ListStacks: %v", err)
+		}
+		if stacks == nil {
+			t.Fatal("expected non-nil slice, got nil")
+		}
+		if len(stacks) != 0 {
+			t.Errorf("expected 0 stacks, got %d", len(stacks))
+		}
+	})
+
+	t.Run("create stack returns assigned ID and fields", func(t *testing.T) {
+		s := newTestStore(t)
+		stack, err := s.CreateStack("angular", "Angular")
+		if err != nil {
+			t.Fatalf("CreateStack: %v", err)
+		}
+		if stack == nil {
+			t.Fatal("expected non-nil stack")
+		}
+		if stack.ID == 0 {
+			t.Error("expected non-zero ID")
+		}
+		if stack.Name != "angular" {
+			t.Errorf("expected name 'angular', got %q", stack.Name)
+		}
+		if stack.DisplayName != "Angular" {
+			t.Errorf("expected display_name 'Angular', got %q", stack.DisplayName)
+		}
+	})
+
+	t.Run("list returns created stacks ordered by name", func(t *testing.T) {
+		s := newTestStore(t)
+		if _, err := s.CreateStack("nestjs", "NestJS"); err != nil {
+			t.Fatalf("CreateStack nestjs: %v", err)
+		}
+		if _, err := s.CreateStack("angular", "Angular"); err != nil {
+			t.Fatalf("CreateStack angular: %v", err)
+		}
+
+		stacks, err := s.ListStacks()
+		if err != nil {
+			t.Fatalf("ListStacks: %v", err)
+		}
+		if len(stacks) != 2 {
+			t.Fatalf("expected 2 stacks, got %d", len(stacks))
+		}
+		// Should be ordered by name ASC
+		if stacks[0].Name != "angular" {
+			t.Errorf("expected first stack 'angular', got %q", stacks[0].Name)
+		}
+		if stacks[1].Name != "nestjs" {
+			t.Errorf("expected second stack 'nestjs', got %q", stacks[1].Name)
+		}
+	})
+
+	t.Run("duplicate name returns error", func(t *testing.T) {
+		s := newTestStore(t)
+		if _, err := s.CreateStack("angular", "Angular"); err != nil {
+			t.Fatalf("first CreateStack: %v", err)
+		}
+		_, err := s.CreateStack("angular", "Angular v2")
+		if err == nil {
+			t.Fatal("expected duplicate name error, got nil")
+		}
+	})
+
+	t.Run("delete removes stack and cascades to skill_stacks", func(t *testing.T) {
+		s := newTestStore(t)
+		stack, err := s.CreateStack("go", "Go")
+		if err != nil {
+			t.Fatalf("CreateStack: %v", err)
+		}
+
+		// Create a skill that references this stack
+		skill, err := s.CreateSkill(CreateSkillParams{
+			Name:        "go-skill",
+			DisplayName: "Go Skill",
+			Content:     "content",
+			StackIDs:    []int64{stack.ID},
+			ChangedBy:   "test",
+		})
+		if err != nil {
+			t.Fatalf("CreateSkill: %v", err)
+		}
+
+		// Verify join row exists
+		var joinCount int
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM skill_stacks WHERE skill_id = ? AND stack_id = ?",
+			skill.ID, stack.ID,
+		).Scan(&joinCount); err != nil {
+			t.Fatalf("count join rows: %v", err)
+		}
+		if joinCount != 1 {
+			t.Errorf("expected 1 skill_stacks row before delete, got %d", joinCount)
+		}
+
+		// Delete the stack — join rows should cascade delete
+		if err := s.DeleteStack(stack.ID); err != nil {
+			t.Fatalf("DeleteStack: %v", err)
+		}
+
+		// Verify join rows are gone
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM skill_stacks WHERE stack_id = ?", stack.ID,
+		).Scan(&joinCount); err != nil {
+			t.Fatalf("count join rows after delete: %v", err)
+		}
+		if joinCount != 0 {
+			t.Errorf("expected 0 skill_stacks rows after cascade delete, got %d", joinCount)
+		}
+
+		// Verify stack is gone from list
+		stacks, err := s.ListStacks()
+		if err != nil {
+			t.Fatalf("ListStacks after delete: %v", err)
+		}
+		if len(stacks) != 0 {
+			t.Errorf("expected 0 stacks after delete, got %d", len(stacks))
+		}
+	})
+}
+
+// Task 2.3 [RED] TestCategoryCRUD — ListCategories, CreateCategory, DeleteCategory
+func TestCategoryCRUD(t *testing.T) {
+	t.Run("list empty returns empty slice", func(t *testing.T) {
+		s := newTestStore(t)
+		categories, err := s.ListCategories()
+		if err != nil {
+			t.Fatalf("ListCategories: %v", err)
+		}
+		if categories == nil {
+			t.Fatal("expected non-nil slice, got nil")
+		}
+		if len(categories) != 0 {
+			t.Errorf("expected 0 categories, got %d", len(categories))
+		}
+	})
+
+	t.Run("create category returns assigned ID and fields", func(t *testing.T) {
+		s := newTestStore(t)
+		cat, err := s.CreateCategory("conventions", "Conventions")
+		if err != nil {
+			t.Fatalf("CreateCategory: %v", err)
+		}
+		if cat == nil {
+			t.Fatal("expected non-nil category")
+		}
+		if cat.ID == 0 {
+			t.Error("expected non-zero ID")
+		}
+		if cat.Name != "conventions" {
+			t.Errorf("expected name 'conventions', got %q", cat.Name)
+		}
+		if cat.DisplayName != "Conventions" {
+			t.Errorf("expected display_name 'Conventions', got %q", cat.DisplayName)
+		}
+	})
+
+	t.Run("list returns created categories ordered by name", func(t *testing.T) {
+		s := newTestStore(t)
+		if _, err := s.CreateCategory("patterns", "Patterns"); err != nil {
+			t.Fatalf("CreateCategory patterns: %v", err)
+		}
+		if _, err := s.CreateCategory("conventions", "Conventions"); err != nil {
+			t.Fatalf("CreateCategory conventions: %v", err)
+		}
+
+		categories, err := s.ListCategories()
+		if err != nil {
+			t.Fatalf("ListCategories: %v", err)
+		}
+		if len(categories) != 2 {
+			t.Fatalf("expected 2 categories, got %d", len(categories))
+		}
+		// Should be ordered by name ASC
+		if categories[0].Name != "conventions" {
+			t.Errorf("expected first category 'conventions', got %q", categories[0].Name)
+		}
+		if categories[1].Name != "patterns" {
+			t.Errorf("expected second category 'patterns', got %q", categories[1].Name)
+		}
+	})
+
+	t.Run("duplicate name returns error", func(t *testing.T) {
+		s := newTestStore(t)
+		if _, err := s.CreateCategory("patterns", "Patterns"); err != nil {
+			t.Fatalf("first CreateCategory: %v", err)
+		}
+		_, err := s.CreateCategory("patterns", "Patterns v2")
+		if err == nil {
+			t.Fatal("expected duplicate name error, got nil")
+		}
+	})
+
+	t.Run("delete removes category and cascades to skill_categories", func(t *testing.T) {
+		s := newTestStore(t)
+		cat, err := s.CreateCategory("tutorial", "Tutorial")
+		if err != nil {
+			t.Fatalf("CreateCategory: %v", err)
+		}
+
+		// Create a skill referencing this category
+		skill, err := s.CreateSkill(CreateSkillParams{
+			Name:        "tutorial-skill",
+			DisplayName: "Tutorial Skill",
+			Content:     "content",
+			CategoryIDs: []int64{cat.ID},
+			ChangedBy:   "test",
+		})
+		if err != nil {
+			t.Fatalf("CreateSkill: %v", err)
+		}
+
+		// Verify join row exists
+		var joinCount int
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM skill_categories WHERE skill_id = ? AND category_id = ?",
+			skill.ID, cat.ID,
+		).Scan(&joinCount); err != nil {
+			t.Fatalf("count join rows: %v", err)
+		}
+		if joinCount != 1 {
+			t.Errorf("expected 1 skill_categories row before delete, got %d", joinCount)
+		}
+
+		// Delete the category
+		if err := s.DeleteCategory(cat.ID); err != nil {
+			t.Fatalf("DeleteCategory: %v", err)
+		}
+
+		// Verify join rows are gone
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM skill_categories WHERE category_id = ?", cat.ID,
+		).Scan(&joinCount); err != nil {
+			t.Fatalf("count join rows after delete: %v", err)
+		}
+		if joinCount != 0 {
+			t.Errorf("expected 0 skill_categories rows after cascade delete, got %d", joinCount)
+		}
+
+		// Verify category is gone from list
+		categories, err := s.ListCategories()
+		if err != nil {
+			t.Fatalf("ListCategories after delete: %v", err)
+		}
+		if len(categories) != 0 {
+			t.Errorf("expected 0 categories after delete, got %d", len(categories))
+		}
+	})
+}
+
+// Task 2.5 [RED] Update TestCreateSkill with join row assertions + FK error test
+func TestCreateSkillWithStacksAndCategories(t *testing.T) {
+	t.Run("create skill with multiple stacks inserts join rows", func(t *testing.T) {
+		s := newTestStore(t)
+
+		st1, err := s.CreateStack("angular", "Angular")
+		if err != nil {
+			t.Fatalf("CreateStack angular: %v", err)
+		}
+		st2, err := s.CreateStack("nestjs", "NestJS")
+		if err != nil {
+			t.Fatalf("CreateStack nestjs: %v", err)
+		}
+		cat1, err := s.CreateCategory("tutorial", "Tutorial")
+		if err != nil {
+			t.Fatalf("CreateCategory tutorial: %v", err)
+		}
+
+		skill, err := s.CreateSkill(CreateSkillParams{
+			Name:        "full-skill",
+			DisplayName: "Full Skill",
+			Content:     "content",
+			StackIDs:    []int64{st1.ID, st2.ID},
+			CategoryIDs: []int64{cat1.ID},
+			ChangedBy:   "test",
+		})
+		if err != nil {
+			t.Fatalf("CreateSkill: %v", err)
+		}
+
+		// Assert: two skill_stacks rows
+		var stackJoins int
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM skill_stacks WHERE skill_id = ?", skill.ID,
+		).Scan(&stackJoins); err != nil {
+			t.Fatalf("count skill_stacks: %v", err)
+		}
+		if stackJoins != 2 {
+			t.Errorf("expected 2 skill_stacks rows, got %d", stackJoins)
+		}
+
+		// Assert: one skill_categories row
+		var catJoins int
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM skill_categories WHERE skill_id = ?", skill.ID,
+		).Scan(&catJoins); err != nil {
+			t.Fatalf("count skill_categories: %v", err)
+		}
+		if catJoins != 1 {
+			t.Errorf("expected 1 skill_categories row, got %d", catJoins)
+		}
+
+		// Assert: GetSkill returns populated slices
+		got, err := s.GetSkill("full-skill")
+		if err != nil {
+			t.Fatalf("GetSkill: %v", err)
+		}
+		if len(got.Stacks) != 2 {
+			t.Errorf("expected 2 Stacks, got %d", len(got.Stacks))
+		}
+		if len(got.Categories) != 1 {
+			t.Errorf("expected 1 Categories, got %d", len(got.Categories))
+		}
+	})
+
+	t.Run("create skill with unknown stack ID returns FK error", func(t *testing.T) {
+		s := newTestStore(t)
+
+		_, err := s.CreateSkill(CreateSkillParams{
+			Name:        "fk-error-skill",
+			DisplayName: "FK Error Skill",
+			Content:     "content",
+			StackIDs:    []int64{99999}, // non-existent stack ID
+			ChangedBy:   "test",
+		})
+		if err == nil {
+			t.Fatal("expected FK constraint error for unknown stack ID, got nil")
+		}
+
+		// Assert: no skill row was persisted (TX should have rolled back)
+		var count int
+		if err2 := s.db.QueryRow("SELECT COUNT(*) FROM skills WHERE name = 'fk-error-skill'").Scan(&count); err2 != nil {
+			t.Fatalf("count skills: %v", err2)
+		}
+		if count != 0 {
+			t.Errorf("expected 0 skill rows after FK error (rollback), got %d", count)
+		}
+	})
+
+	t.Run("get skill with no relationships returns empty slices", func(t *testing.T) {
+		s := newTestStore(t)
+
+		if _, err := s.CreateSkill(CreateSkillParams{
+			Name:        "bare-skill",
+			DisplayName: "Bare Skill",
+			Content:     "content",
+			ChangedBy:   "test",
+		}); err != nil {
+			t.Fatalf("CreateSkill: %v", err)
+		}
+
+		got, err := s.GetSkill("bare-skill")
+		if err != nil {
+			t.Fatalf("GetSkill: %v", err)
+		}
+		if got.Stacks == nil {
+			t.Error("expected Stacks to be empty slice (not nil)")
+		}
+		if len(got.Stacks) != 0 {
+			t.Errorf("expected 0 stacks, got %d", len(got.Stacks))
+		}
+		if got.Categories == nil {
+			t.Error("expected Categories to be empty slice (not nil)")
+		}
+		if len(got.Categories) != 0 {
+			t.Errorf("expected 0 categories, got %d", len(got.Categories))
+		}
+	})
+}
+
 // Task 3.1 — FTS tests: keyword, content, special-char sanitization, FTS empty after delete
 func TestSearchSkillsByTriggerKeyword(t *testing.T) {
 	s := newTestStore(t)
@@ -4773,7 +5190,6 @@ func TestSearchSkillsByTriggerKeyword(t *testing.T) {
 		DisplayName: "FTS Skill",
 		Triggers:    "when writing htmx",
 		Content:     "htmx guide content",
-		Stack:       "Go",
 		ChangedBy:   "system",
 	}); err != nil {
 		t.Fatalf("CreateSkill: %v", err)
@@ -4863,4 +5279,282 @@ func TestSearchSkillsFTSEmptyAfterDelete(t *testing.T) {
 	if len(after) != 0 {
 		t.Errorf("expected 0 results after delete, got %d", len(after))
 	}
+}
+
+// ─── Phase 1 — Schema Migration Tests ────────────────────────────────────────
+
+// TestMigrateSkillsCatalogTables verifies the full catalog migration:
+// - pre-migration DB with stack/category columns gets migrated correctly
+// - catalog tables (stacks, categories, skill_stacks, skill_categories) are created
+// - old stack/category columns are removed from skills
+// - comma-separated values are parsed into join rows
+// - duplicate catalog names are deduplicated
+// - migration is idempotent (2nd run = no-op, no error)
+func TestMigrateSkillsCatalogTables(t *testing.T) {
+	t.Run("migrates pre-migration DB correctly", func(t *testing.T) {
+		dataDir := t.TempDir()
+		dbPath := filepath.Join(dataDir, "lore.db")
+
+		// Seed a pre-migration DB with skills that have stack/category columns
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			t.Fatalf("open legacy db: %v", err)
+		}
+		if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+			t.Fatalf("enable fk: %v", err)
+		}
+		_, err = db.Exec(`
+			CREATE TABLE sessions (
+				id TEXT PRIMARY KEY,
+				project TEXT NOT NULL,
+				directory TEXT NOT NULL,
+				started_at TEXT NOT NULL DEFAULT (datetime('now')),
+				ended_at TEXT,
+				summary TEXT
+			);
+			CREATE TABLE skills (
+				id           INTEGER PRIMARY KEY AUTOINCREMENT,
+				name         TEXT    NOT NULL UNIQUE,
+				display_name TEXT    NOT NULL,
+				category     TEXT    NOT NULL DEFAULT '',
+				stack        TEXT    NOT NULL DEFAULT '',
+				triggers     TEXT    NOT NULL DEFAULT '',
+				content      TEXT    NOT NULL,
+				version      INTEGER NOT NULL DEFAULT 1,
+				is_active    INTEGER NOT NULL DEFAULT 1,
+				changed_by   TEXT    NOT NULL DEFAULT 'system',
+				created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+				updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+			);
+			CREATE TABLE skill_versions (
+				id         INTEGER PRIMARY KEY AUTOINCREMENT,
+				skill_id   INTEGER NOT NULL,
+				version    INTEGER NOT NULL,
+				content    TEXT    NOT NULL,
+				changed_by TEXT    NOT NULL DEFAULT 'system',
+				created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+				FOREIGN KEY (skill_id) REFERENCES skills(id)
+			);
+			INSERT INTO skills (name, display_name, stack, category, content)
+			VALUES
+				('angular-guard', 'Angular Guard', 'angular', 'conventions', 'angular content'),
+				('multi-stack', 'Multi Stack', 'angular,nestjs', 'conventions,patterns', 'multi content'),
+				('no-meta', 'No Meta', '', '', 'bare content');
+		`)
+		if err != nil {
+			_ = db.Close()
+			t.Fatalf("seed legacy db: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close legacy db: %v", err)
+		}
+
+		// Open store — this triggers migration
+		cfg := mustDefaultConfig(t)
+		cfg.DataDir = dataDir
+		s, err := New(cfg)
+		if err != nil {
+			t.Fatalf("New() after legacy schema: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+
+		// Assert: catalog tables exist
+		for _, tbl := range []string{"stacks", "categories", "skill_stacks", "skill_categories"} {
+			var name string
+			if err := s.db.QueryRow(
+				"SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tbl,
+			).Scan(&name); err != nil {
+				t.Errorf("expected table %q to exist, got: %v", tbl, err)
+			}
+		}
+
+		// Assert: old stack/category columns removed from skills
+		rows, err := s.db.Query("PRAGMA table_info(skills)")
+		if err != nil {
+			t.Fatalf("PRAGMA table_info(skills): %v", err)
+		}
+		defer rows.Close()
+		var hasStack, hasCategory bool
+		for rows.Next() {
+			var cid int
+			var colName, colType string
+			var notNull, pk int
+			var defaultVal any
+			if err := rows.Scan(&cid, &colName, &colType, &notNull, &defaultVal, &pk); err != nil {
+				t.Fatalf("scan column: %v", err)
+			}
+			if colName == "stack" {
+				hasStack = true
+			}
+			if colName == "category" {
+				hasCategory = true
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate columns: %v", err)
+		}
+		if hasStack {
+			t.Error("expected skills.stack column to be removed after migration")
+		}
+		if hasCategory {
+			t.Error("expected skills.category column to be removed after migration")
+		}
+
+		// Assert: single stack migrated correctly (angular-guard → stacks row + skill_stacks row)
+		var angularStackID int64
+		if err := s.db.QueryRow(
+			"SELECT id FROM stacks WHERE name = 'angular'",
+		).Scan(&angularStackID); err != nil {
+			t.Fatalf("expected stacks row for 'angular': %v", err)
+		}
+
+		var guardSkillID int64
+		if err := s.db.QueryRow(
+			"SELECT id FROM skills WHERE name = 'angular-guard'",
+		).Scan(&guardSkillID); err != nil {
+			t.Fatalf("expected angular-guard skill to exist: %v", err)
+		}
+
+		var joinCount int
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM skill_stacks WHERE skill_id = ? AND stack_id = ?",
+			guardSkillID, angularStackID,
+		).Scan(&joinCount); err != nil {
+			t.Fatalf("count skill_stacks for angular-guard: %v", err)
+		}
+		if joinCount != 1 {
+			t.Errorf("expected 1 skill_stacks row for angular-guard/angular, got %d", joinCount)
+		}
+
+		// Assert: comma-separated values produce multiple join rows (multi-stack)
+		var multiSkillID int64
+		if err := s.db.QueryRow(
+			"SELECT id FROM skills WHERE name = 'multi-stack'",
+		).Scan(&multiSkillID); err != nil {
+			t.Fatalf("expected multi-stack skill to exist: %v", err)
+		}
+
+		var multiStackJoins int
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM skill_stacks WHERE skill_id = ?", multiSkillID,
+		).Scan(&multiStackJoins); err != nil {
+			t.Fatalf("count multi-stack stacks: %v", err)
+		}
+		if multiStackJoins != 2 {
+			t.Errorf("expected 2 skill_stacks rows for multi-stack (angular,nestjs), got %d", multiStackJoins)
+		}
+
+		var multiCatJoins int
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM skill_categories WHERE skill_id = ?", multiSkillID,
+		).Scan(&multiCatJoins); err != nil {
+			t.Fatalf("count multi-stack categories: %v", err)
+		}
+		if multiCatJoins != 2 {
+			t.Errorf("expected 2 skill_categories rows for multi-stack (conventions,patterns), got %d", multiCatJoins)
+		}
+
+		// Assert: duplicate catalog entries are deduplicated
+		// Both angular-guard and multi-stack share "angular" → only 1 row in stacks
+		var angularCount int
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM stacks WHERE name = 'angular'",
+		).Scan(&angularCount); err != nil {
+			t.Fatalf("count stacks for angular: %v", err)
+		}
+		if angularCount != 1 {
+			t.Errorf("expected exactly 1 stacks row for 'angular', got %d", angularCount)
+		}
+
+		// Assert: total stacks count (angular, nestjs = 2 unique stacks)
+		var totalStacks int
+		if err := s.db.QueryRow("SELECT COUNT(*) FROM stacks").Scan(&totalStacks); err != nil {
+			t.Fatalf("count stacks: %v", err)
+		}
+		if totalStacks != 2 {
+			t.Errorf("expected 2 unique stacks (angular, nestjs), got %d", totalStacks)
+		}
+
+		// Assert: skill with no stack/category produces no join rows
+		var noMetaID int64
+		if err := s.db.QueryRow(
+			"SELECT id FROM skills WHERE name = 'no-meta'",
+		).Scan(&noMetaID); err != nil {
+			t.Fatalf("expected no-meta skill to exist: %v", err)
+		}
+		var noMetaJoins int
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM skill_stacks WHERE skill_id = ?", noMetaID,
+		).Scan(&noMetaJoins); err != nil {
+			t.Fatalf("count no-meta stacks: %v", err)
+		}
+		if noMetaJoins != 0 {
+			t.Errorf("expected 0 skill_stacks rows for no-meta, got %d", noMetaJoins)
+		}
+	})
+
+	t.Run("idempotent - second call is a no-op", func(t *testing.T) {
+		s := newTestStore(t)
+
+		// First call from New() already ran. Call again — must not error.
+		if err := s.migrateSkillsCatalogTables(); err != nil {
+			t.Fatalf("second migrateSkillsCatalogTables should be no-op: %v", err)
+		}
+
+		// And again (truly idempotent)
+		if err := s.migrateSkillsCatalogTables(); err != nil {
+			t.Fatalf("third migrateSkillsCatalogTables should be no-op: %v", err)
+		}
+	})
+
+	t.Run("cascade delete removes join rows", func(t *testing.T) {
+		s := newTestStore(t)
+
+		// Create a stack and skill with a join row
+		res, err := s.db.Exec(`INSERT INTO stacks (name, display_name) VALUES ('go', 'Go')`)
+		if err != nil {
+			t.Fatalf("insert stack: %v", err)
+		}
+		stackID, _ := res.LastInsertId()
+
+		skill, err := s.CreateSkill(CreateSkillParams{
+			Name:        "cascade-skill",
+			DisplayName: "Cascade Skill",
+			StackIDs:    []int64{stackID},
+			Content:     "content",
+			ChangedBy:   "test",
+		})
+		if err != nil {
+			t.Fatalf("CreateSkill: %v", err)
+		}
+
+		// Verify join row exists
+		var joinCount int
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM skill_stacks WHERE skill_id = ?", skill.ID,
+		).Scan(&joinCount); err != nil {
+			t.Fatalf("count join rows: %v", err)
+		}
+		if joinCount != 1 {
+			t.Errorf("expected 1 skill_stacks row before delete, got %d", joinCount)
+		}
+
+		// Delete the skill (requires deleting skill_versions first due to FK)
+		if _, err := s.db.Exec("DELETE FROM skill_versions WHERE skill_id = ?", skill.ID); err != nil {
+			t.Fatalf("delete skill_versions: %v", err)
+		}
+		if _, err := s.db.Exec("DELETE FROM skills WHERE id = ?", skill.ID); err != nil {
+			t.Fatalf("delete skill: %v", err)
+		}
+
+		// Verify cascade delete removed join rows
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM skill_stacks WHERE skill_id = ?", skill.ID,
+		).Scan(&joinCount); err != nil {
+			t.Fatalf("count join rows after delete: %v", err)
+		}
+		if joinCount != 0 {
+			t.Errorf("expected 0 skill_stacks rows after cascade delete, got %d", joinCount)
+		}
+	})
 }

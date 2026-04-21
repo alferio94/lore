@@ -85,6 +85,16 @@ func Mount(mux *http.ServeMux, cfg AdminConfig) {
 	mux.HandleFunc("PUT /admin/api/skills/{name}", requireRole(cfg.JWTSecret, "tech_lead", h.handleUpdateSkill))
 	mux.HandleFunc("DELETE /admin/api/skills/{name}", requireRole(cfg.JWTSecret, "admin", h.handleDeleteSkill))
 
+	// Stacks catalog API routes
+	mux.HandleFunc("GET /admin/api/stacks", requireRole(cfg.JWTSecret, "viewer", h.handleListStacks))
+	mux.HandleFunc("POST /admin/api/stacks", requireRole(cfg.JWTSecret, "tech_lead", h.handleCreateStack))
+	mux.HandleFunc("DELETE /admin/api/stacks/{id}", requireRole(cfg.JWTSecret, "admin", h.handleDeleteStack))
+
+	// Categories catalog API routes
+	mux.HandleFunc("GET /admin/api/categories", requireRole(cfg.JWTSecret, "viewer", h.handleListCategories))
+	mux.HandleFunc("POST /admin/api/categories", requireRole(cfg.JWTSecret, "tech_lead", h.handleCreateCategory))
+	mux.HandleFunc("DELETE /admin/api/categories/{id}", requireRole(cfg.JWTSecret, "admin", h.handleDeleteCategory))
+
 	// ── Stats API ──
 	mux.HandleFunc("GET /admin/api/stats", requireRole(cfg.JWTSecret, "viewer", h.handleStats))
 

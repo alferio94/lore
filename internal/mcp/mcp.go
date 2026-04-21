@@ -649,20 +649,20 @@ Duplicates are automatically detected and skipped — safe to call multiple time
 	if shouldRegister("lore_list_skills", allowlist) {
 		srv.AddTool(
 			mcp.NewTool("lore_list_skills",
-				mcp.WithDescription("List available team coding skills. Returns metadata (name, display_name, category, stack, triggers, version) without content. Filter by stack or category, or use query for full-text search."),
+				mcp.WithDescription("List available team coding skills. Returns metadata (name, display_name, stacks, categories, triggers, version) without content. Filter by stack_id or category_id (integer IDs from catalog), or use query for full-text search."),
 				mcp.WithTitleAnnotation("List Skills"),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithDestructiveHintAnnotation(false),
 				mcp.WithIdempotentHintAnnotation(true),
 				mcp.WithOpenWorldHintAnnotation(false),
-				mcp.WithString("stack",
-					mcp.Description("Filter by technology stack (e.g. 'angular', 'nestjs', 'java')"),
+				mcp.WithNumber("stack_id",
+					mcp.Description("Filter by technology stack ID (integer). Use the id from the stacks catalog."),
 				),
-				mcp.WithString("category",
-					mcp.Description("Filter by skill category (e.g. 'conventions', 'architecture', 'patterns')"),
+				mcp.WithNumber("category_id",
+					mcp.Description("Filter by skill category ID (integer). Use the id from the categories catalog."),
 				),
 				mcp.WithString("query",
-					mcp.Description("Full-text search query across name, triggers, content, and stack"),
+					mcp.Description("Full-text search query across name, triggers, and content"),
 				),
 			),
 			handleListSkills(s),
@@ -673,7 +673,7 @@ Duplicates are automatically detected and skipped — safe to call multiple time
 	if shouldRegister("lore_get_skill", allowlist) {
 		srv.AddTool(
 			mcp.NewTool("lore_get_skill",
-				mcp.WithDescription("Get the full content of a skill by name. Returns complete markdown content plus metadata (display_name, category, stack, triggers, version)."),
+				mcp.WithDescription("Get the full content of a skill by name. Returns complete markdown content plus metadata (display_name, stacks, categories, triggers, version)."),
 				mcp.WithTitleAnnotation("Get Skill"),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithDestructiveHintAnnotation(false),
@@ -1245,15 +1245,20 @@ func handleMergeProjects(s *store.Store) server.ToolHandlerFunc {
 
 func handleListSkills(s *store.Store) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		stack, _ := req.GetArguments()["stack"].(string)
-		category, _ := req.GetArguments()["category"].(string)
 		query, _ := req.GetArguments()["query"].(string)
 
-		skills, err := s.ListSkills(store.ListSkillsParams{
-			Stack:    stack,
-			Category: category,
-			Query:    query,
-		})
+		params := store.ListSkillsParams{Query: query}
+
+		if v, ok := req.GetArguments()["stack_id"].(float64); ok {
+			id := int64(v)
+			params.StackID = &id
+		}
+		if v, ok := req.GetArguments()["category_id"].(float64); ok {
+			id := int64(v)
+			params.CategoryID = &id
+		}
+
+		skills, err := s.ListSkills(params)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to list skills: %s", err)), nil
 		}
@@ -1264,15 +1269,15 @@ func handleListSkills(s *store.Store) server.ToolHandlerFunc {
 
 		// Return metadata only — strip content field from each skill
 		type skillMeta struct {
-			ID          int64  `json:"id"`
-			Name        string `json:"name"`
-			DisplayName string `json:"display_name"`
-			Category    string `json:"category"`
-			Stack       string `json:"stack"`
-			Triggers    string `json:"triggers"`
-			Version     int    `json:"version"`
-			IsActive    bool   `json:"is_active"`
-			UpdatedAt   string `json:"updated_at"`
+			ID          int64               `json:"id"`
+			Name        string              `json:"name"`
+			DisplayName string              `json:"display_name"`
+			Stacks      []store.StackRef    `json:"stacks"`
+			Categories  []store.CategoryRef `json:"categories"`
+			Triggers    string              `json:"triggers"`
+			Version     int                 `json:"version"`
+			IsActive    bool                `json:"is_active"`
+			UpdatedAt   string              `json:"updated_at"`
 		}
 		metas := make([]skillMeta, len(skills))
 		for i, sk := range skills {
@@ -1280,8 +1285,8 @@ func handleListSkills(s *store.Store) server.ToolHandlerFunc {
 				ID:          sk.ID,
 				Name:        sk.Name,
 				DisplayName: sk.DisplayName,
-				Category:    sk.Category,
-				Stack:       sk.Stack,
+				Stacks:      sk.Stacks,
+				Categories:  sk.Categories,
 				Triggers:    sk.Triggers,
 				Version:     sk.Version,
 				IsActive:    sk.IsActive,

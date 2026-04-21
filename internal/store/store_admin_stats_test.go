@@ -97,8 +97,6 @@ func TestAdminStats_ActiveSkills(t *testing.T) {
 		sk, err := s.CreateSkill(CreateSkillParams{
 			Name:        fmt.Sprintf("skill-%d", i),
 			DisplayName: fmt.Sprintf("Skill %d", i),
-			Category:    "test",
-			Stack:       "go",
 			Triggers:    "trigger",
 			Content:     "content",
 			ChangedBy:   "test",
