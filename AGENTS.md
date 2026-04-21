@@ -37,4 +37,5 @@ When working on this project, load the relevant skill(s) BEFORE writing any code
 | `lore-ui-elements` | Adding or changing dashboard UI components or connected browsing flows. | [`skills/ui-elements/SKILL.md`](skills/ui-elements/SKILL.md) |
 | `lore-visual-language` | Any dashboard styling, typography, spacing, or visual identity change. | [`skills/visual-language/SKILL.md`](skills/visual-language/SKILL.md) |
 | `lore-backlog-triage` | Auditing open issues or PRs, triaging the backlog, or reviewing contributor submissions as a maintainer. | [`skills/backlog-triage/SKILL.md`](skills/backlog-triage/SKILL.md) |
+| `lore-skill-creator` | When a tech lead asks to draft a skill for the Lore platform, or preparing skill content for the admin web interface. | [`skills/lore-skill-creator/SKILL.md`](skills/lore-skill-creator/SKILL.md) |
 | `gentleman-bubbletea` | When editing Go files in installer/internal/tui/, working on TUI screens, or adding new UI features. | [`skills/gentleman-bubbletea/SKILL.md`](skills/gentleman-bubbletea/SKILL.md) |
