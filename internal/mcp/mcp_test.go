@@ -1493,6 +1493,111 @@ func TestExplicitSessionIDBypassesDefault(t *testing.T) {
 	}
 }
 
+// ─── compact-rules Phase 4: MCP Protocol ─────────────────────────────────────
+
+// Task 4.1 RED: lore_get_skill response includes compact_rules;
+// lore_list_skills items do NOT include compact_rules.
+
+func TestHandleGetSkillIncludesCompactRules(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	// Create a skill with compact_rules
+	_, err := s.CreateSkill(store.CreateSkillParams{
+		Name:         "cr-mcp-skill",
+		Content:      "full content here",
+		CompactRules: "Use Given/When/Then.",
+		ChangedBy:    "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	h := handleGetSkill(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"name": "cr-mcp-skill",
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	if !strings.Contains(text, `"compact_rules"`) {
+		t.Errorf("lore_get_skill response should contain compact_rules key, got: %s", text)
+	}
+	if !strings.Contains(text, "Use Given/When/Then.") {
+		t.Errorf("lore_get_skill response should contain compact_rules value, got: %s", text)
+	}
+}
+
+func TestHandleGetSkillIncludesEmptyCompactRules(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	_, err := s.CreateSkill(store.CreateSkillParams{
+		Name:      "no-cr-mcp-skill",
+		Content:   "content",
+		ChangedBy: "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	h := handleGetSkill(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"name": "no-cr-mcp-skill",
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	// compact_rules key should be present (marshalled as empty string)
+	if !strings.Contains(text, `"compact_rules"`) {
+		t.Errorf("lore_get_skill should include compact_rules key even when empty, got: %s", text)
+	}
+}
+
+// Task 4.2 — confirm lore_list_skills intentionally omits compact_rules.
+func TestHandleListSkillsOmitsCompactRules(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	_, err := s.CreateSkill(store.CreateSkillParams{
+		Name:         "list-cr-skill",
+		Content:      "content",
+		CompactRules: "should not appear in list",
+		ChangedBy:    "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	h := handleListSkills(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	// skillMeta intentionally omits compact_rules
+	if strings.Contains(text, `"compact_rules"`) {
+		t.Errorf("lore_list_skills response should NOT contain compact_rules key, got: %s", text)
+	}
+}
+
 func TestDestructiveToolAnnotation(t *testing.T) {
 	s := newMCPTestStore(t)
 	srv := NewServer(s)

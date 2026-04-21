@@ -627,5 +627,140 @@ func jsonInt64(i int64) string {
 	return string(buf[pos:])
 }
 
+// ─── compact-rules Phase 3: Admin API ────────────────────────────────────────
+
+// Task 3.1 RED: POST /admin/api/skills with compact_rules persists it; without
+// compact_rules the request still succeeds with empty string.
+
+func TestHandleCreateSkillPersistsCompactRules(t *testing.T) {
+	s := newTestStoreForAdmin(t)
+	cfg := makeSkillsConfig(s)
+	h := &adminHandler{cfg: cfg}
+
+	body := strings.NewReader(`{"name":"cr-skill","content":"some content","compact_rules":"use table-driven tests"}`)
+	req := newTestRequest(t, "POST", "/admin/api/skills", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(makeSkillsCookie(t, cfg, "tech_lead"))
+	w := newTestResponseRecorder()
+
+	authed := requireRole(cfg.JWTSecret, "tech_lead", h.handleCreateSkill)
+	authed(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("status: got %d, want 201 (body: %s)", w.Code, w.Body.String())
+	}
+
+	var sk store.Skill
+	if err := json.NewDecoder(w.Body).Decode(&sk); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if sk.CompactRules != "use table-driven tests" {
+		t.Errorf("compact_rules: got %q, want %q", sk.CompactRules, "use table-driven tests")
+	}
+}
+
+func TestHandleCreateSkillWithoutCompactRulesSucceeds(t *testing.T) {
+	s := newTestStoreForAdmin(t)
+	cfg := makeSkillsConfig(s)
+	h := &adminHandler{cfg: cfg}
+
+	body := strings.NewReader(`{"name":"no-cr-skill","content":"some content"}`)
+	req := newTestRequest(t, "POST", "/admin/api/skills", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(makeSkillsCookie(t, cfg, "tech_lead"))
+	w := newTestResponseRecorder()
+
+	authed := requireRole(cfg.JWTSecret, "tech_lead", h.handleCreateSkill)
+	authed(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("status: got %d, want 201 (body: %s)", w.Code, w.Body.String())
+	}
+
+	var sk store.Skill
+	if err := json.NewDecoder(w.Body).Decode(&sk); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if sk.CompactRules != "" {
+		t.Errorf("compact_rules: got %q, want empty string", sk.CompactRules)
+	}
+}
+
+// Task 3.3 RED: PUT /admin/api/skills/{name} with only compact_rules returns 200;
+// hasAnyField() returns true when only compact_rules is set.
+
+func TestHandleUpdateSkillWithOnlyCompactRulesReturns200(t *testing.T) {
+	s := newTestStoreForAdmin(t)
+	seedSkill(t, s, "update-cr-skill")
+
+	cfg := makeSkillsConfig(s)
+	h := &adminHandler{cfg: cfg}
+
+	body := strings.NewReader(`{"compact_rules":"always use RFC 2119"}`)
+	req := newTestRequest(t, "PUT", "/admin/api/skills/update-cr-skill", body)
+	req = withPathValue(req, "name", "update-cr-skill")
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(makeSkillsCookie(t, cfg, "tech_lead"))
+	w := newTestResponseRecorder()
+
+	authed := requireRole(cfg.JWTSecret, "tech_lead", h.handleUpdateSkill)
+	authed(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status: got %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+
+	var sk store.Skill
+	if err := json.NewDecoder(w.Body).Decode(&sk); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if sk.CompactRules != "always use RFC 2119" {
+		t.Errorf("compact_rules: got %q, want %q", sk.CompactRules, "always use RFC 2119")
+	}
+}
+
+func TestHasAnyFieldReturnsTrueWhenOnlyCompactRulesSet(t *testing.T) {
+	cr := "some rules"
+	u := &updateSkillRequest{CompactRules: &cr}
+	if !u.hasAnyField() {
+		t.Error("hasAnyField() should return true when only CompactRules is set")
+	}
+}
+
+func TestHandleUpdateSkillNullCompactRulesPreservesExisting(t *testing.T) {
+	s := newTestStoreForAdmin(t)
+	// Create skill with compact_rules set
+	_, err := s.CreateSkill(store.CreateSkillParams{
+		Name:         "cr-preserve",
+		Content:      "content",
+		CompactRules: "existing rules",
+		ChangedBy:    "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	cfg := makeSkillsConfig(s)
+	h := &adminHandler{cfg: cfg}
+
+	// Send null compact_rules — should preserve existing value
+	body := strings.NewReader(`{"compact_rules":null}`)
+	req := newTestRequest(t, "PUT", "/admin/api/skills/cr-preserve", body)
+	req = withPathValue(req, "name", "cr-preserve")
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(makeSkillsCookie(t, cfg, "tech_lead"))
+	w := newTestResponseRecorder()
+
+	authed := requireRole(cfg.JWTSecret, "tech_lead", h.handleUpdateSkill)
+	authed(w, req)
+
+	// null compact_rules means no change — but we need another field too or 422
+	// Per spec: `{"compact_rules": null}` → UpdateSkillParams.CompactRules = nil (no change)
+	// but hasAnyField() with null means the field is absent/nil → still 422
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status: got %d, want 422 when all fields are null", w.Code)
+	}
+}
+
 // Sentinel to use sql.ErrNoRows in the handler — keep compiler happy
 var _ = sql.ErrNoRows

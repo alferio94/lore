@@ -174,27 +174,29 @@ type StackRef = Stack
 type CategoryRef = Category
 
 type Skill struct {
-	ID          int64         `json:"id"`
-	Name        string        `json:"name"`
-	DisplayName string        `json:"display_name"`
-	Stacks      []StackRef    `json:"stacks"`
-	Categories  []CategoryRef `json:"categories"`
-	Triggers    string        `json:"triggers"`
-	Content     string        `json:"content"`
-	Version     int           `json:"version"`
-	IsActive    bool          `json:"is_active"`
-	ChangedBy   string        `json:"changed_by"`
-	CreatedAt   string        `json:"created_at"`
-	UpdatedAt   string        `json:"updated_at"`
+	ID           int64         `json:"id"`
+	Name         string        `json:"name"`
+	DisplayName  string        `json:"display_name"`
+	Stacks       []StackRef    `json:"stacks"`
+	Categories   []CategoryRef `json:"categories"`
+	Triggers     string        `json:"triggers"`
+	Content      string        `json:"content"`
+	CompactRules string        `json:"compact_rules"`
+	Version      int           `json:"version"`
+	IsActive     bool          `json:"is_active"`
+	ChangedBy    string        `json:"changed_by"`
+	CreatedAt    string        `json:"created_at"`
+	UpdatedAt    string        `json:"updated_at"`
 }
 
 type SkillVersion struct {
-	ID        int64  `json:"id"`
-	SkillID   int64  `json:"skill_id"`
-	Version   int    `json:"version"`
-	Content   string `json:"content"`
-	ChangedBy string `json:"changed_by"`
-	CreatedAt string `json:"created_at"`
+	ID           int64  `json:"id"`
+	SkillID      int64  `json:"skill_id"`
+	Version      int    `json:"version"`
+	Content      string `json:"content"`
+	CompactRules string `json:"compact_rules"`
+	ChangedBy    string `json:"changed_by"`
+	CreatedAt    string `json:"created_at"`
 }
 
 type User struct {
@@ -215,22 +217,24 @@ type ListSkillsParams struct {
 }
 
 type CreateSkillParams struct {
-	Name        string  `json:"name"`
-	DisplayName string  `json:"display_name"`
-	StackIDs    []int64 `json:"stack_ids"`
-	CategoryIDs []int64 `json:"category_ids"`
-	Triggers    string  `json:"triggers"`
-	Content     string  `json:"content"`
-	ChangedBy   string  `json:"changed_by"`
+	Name         string  `json:"name"`
+	DisplayName  string  `json:"display_name"`
+	StackIDs     []int64 `json:"stack_ids"`
+	CategoryIDs  []int64 `json:"category_ids"`
+	Triggers     string  `json:"triggers"`
+	Content      string  `json:"content"`
+	CompactRules string  `json:"compact_rules"`
+	ChangedBy    string  `json:"changed_by"`
 }
 
 type UpdateSkillParams struct {
-	DisplayName *string  `json:"display_name,omitempty"`
-	StackIDs    *[]int64 `json:"stack_ids,omitempty"`    // nil = no change, empty = clear all
-	CategoryIDs *[]int64 `json:"category_ids,omitempty"` // nil = no change, empty = clear all
-	Triggers    *string  `json:"triggers,omitempty"`
-	Content     *string  `json:"content,omitempty"`
-	ChangedBy   string   `json:"changed_by"`
+	DisplayName  *string  `json:"display_name,omitempty"`
+	StackIDs     *[]int64 `json:"stack_ids,omitempty"`    // nil = no change, empty = clear all
+	CategoryIDs  *[]int64 `json:"category_ids,omitempty"` // nil = no change, empty = clear all
+	Triggers     *string  `json:"triggers,omitempty"`
+	Content      *string  `json:"content,omitempty"`
+	CompactRules *string  `json:"compact_rules,omitempty"` // nil = no change
+	ChangedBy    string   `json:"changed_by"`
 }
 
 const (
@@ -627,16 +631,17 @@ func (s *Store) migrate() error {
 		);
 
 		CREATE TABLE IF NOT EXISTS skills (
-			id           INTEGER PRIMARY KEY AUTOINCREMENT,
-			name         TEXT    NOT NULL UNIQUE,
-			display_name TEXT    NOT NULL,
-			triggers     TEXT    NOT NULL DEFAULT '',
-			content      TEXT    NOT NULL,
-			version      INTEGER NOT NULL DEFAULT 1,
-			is_active    INTEGER NOT NULL DEFAULT 1,
-			changed_by   TEXT    NOT NULL DEFAULT 'system',
-			created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
-			updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			name          TEXT    NOT NULL UNIQUE,
+			display_name  TEXT    NOT NULL,
+			triggers      TEXT    NOT NULL DEFAULT '',
+			content       TEXT    NOT NULL,
+			compact_rules TEXT    NOT NULL DEFAULT '',
+			version       INTEGER NOT NULL DEFAULT 1,
+			is_active     INTEGER NOT NULL DEFAULT 1,
+			changed_by    TEXT    NOT NULL DEFAULT 'system',
+			created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+			updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
 		);
 		CREATE INDEX IF NOT EXISTS idx_skills_name   ON skills(name);
 		CREATE INDEX IF NOT EXISTS idx_skills_active ON skills(is_active);
@@ -672,12 +677,13 @@ func (s *Store) migrate() error {
 		);
 
 		CREATE TABLE IF NOT EXISTS skill_versions (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
-			skill_id   INTEGER NOT NULL,
-			version    INTEGER NOT NULL,
-			content    TEXT    NOT NULL,
-			changed_by TEXT    NOT NULL DEFAULT 'system',
-			created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			skill_id      INTEGER NOT NULL,
+			version       INTEGER NOT NULL,
+			content       TEXT    NOT NULL,
+			compact_rules TEXT    NOT NULL DEFAULT '',
+			changed_by    TEXT    NOT NULL DEFAULT 'system',
+			created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
 			FOREIGN KEY (skill_id) REFERENCES skills(id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_skill_versions_skill ON skill_versions(skill_id, version DESC);
@@ -866,6 +872,14 @@ func (s *Store) migrate() error {
 
 	// Migrate legacy skills schema (stack/category columns → catalog tables)
 	if err := s.migrateSkillsCatalogTables(); err != nil {
+		return err
+	}
+
+	// Add compact_rules column to skills and skill_versions (idempotent — addColumnIfNotExists)
+	if err := s.addColumnIfNotExists("skills", "compact_rules", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.addColumnIfNotExists("skill_versions", "compact_rules", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 
@@ -4263,9 +4277,9 @@ func (s *Store) CreateSkill(params CreateSkillParams) (*Skill, error) {
 	var skill *Skill
 	err := s.withTx(func(tx *sql.Tx) error {
 		res, err := s.execHook(tx, `
-			INSERT INTO skills (name, display_name, triggers, content, version, is_active, changed_by)
-			VALUES (?, ?, ?, ?, 1, 1, ?)`,
-			params.Name, params.DisplayName, params.Triggers, params.Content, changedBy,
+			INSERT INTO skills (name, display_name, triggers, content, compact_rules, version, is_active, changed_by)
+			VALUES (?, ?, ?, ?, ?, 1, 1, ?)`,
+			params.Name, params.DisplayName, params.Triggers, params.Content, params.CompactRules, changedBy,
 		)
 		if err != nil {
 			return err
@@ -4282,16 +4296,16 @@ func (s *Store) CreateSkill(params CreateSkillParams) (*Skill, error) {
 
 		// Insert initial version row
 		if _, err := s.execHook(tx, `
-			INSERT INTO skill_versions (skill_id, version, content, changed_by)
-			VALUES (?, 1, ?, ?)`,
-			skillID, params.Content, changedBy,
+			INSERT INTO skill_versions (skill_id, version, content, compact_rules, changed_by)
+			VALUES (?, 1, ?, ?, ?)`,
+			skillID, params.Content, params.CompactRules, changedBy,
 		); err != nil {
 			return err
 		}
 
 		// Read back the full row
 		rows, err := s.queryHook(tx, `
-			SELECT id, name, display_name, triggers, content, version, is_active, changed_by, created_at, updated_at
+			SELECT id, name, display_name, triggers, content, compact_rules, version, is_active, changed_by, created_at, updated_at
 			FROM skills WHERE id = ?`, skillID)
 		if err != nil {
 			return err
@@ -4300,7 +4314,7 @@ func (s *Store) CreateSkill(params CreateSkillParams) (*Skill, error) {
 		if rows.Next() {
 			var sk Skill
 			var isActive int
-			if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+			if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.CompactRules, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 				return err
 			}
 			sk.IsActive = isActive == 1
@@ -4353,6 +4367,10 @@ func (s *Store) UpdateSkill(name string, params UpdateSkillParams) (*Skill, erro
 			setClauses = append(setClauses, "content = ?")
 			args = append(args, *params.Content)
 		}
+		if params.CompactRules != nil {
+			setClauses = append(setClauses, "compact_rules = ?")
+			args = append(args, *params.CompactRules)
+		}
 		args = append(args, skillID)
 
 		updateSQL := "UPDATE skills SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
@@ -4382,24 +4400,24 @@ func (s *Store) UpdateSkill(name string, params UpdateSkillParams) (*Skill, erro
 			}
 		}
 
-		// Read back the content for version row
-		var content string
-		if err := tx.QueryRow(`SELECT content FROM skills WHERE id = ?`, skillID).Scan(&content); err != nil {
+		// Read back the content and compact_rules for version row
+		var content, compactRules string
+		if err := tx.QueryRow(`SELECT content, compact_rules FROM skills WHERE id = ?`, skillID).Scan(&content, &compactRules); err != nil {
 			return err
 		}
 
 		// Insert new version row
 		if _, err := s.execHook(tx, `
-			INSERT INTO skill_versions (skill_id, version, content, changed_by)
-			VALUES (?, ?, ?, ?)`,
-			skillID, newVersion, content, changedBy,
+			INSERT INTO skill_versions (skill_id, version, content, compact_rules, changed_by)
+			VALUES (?, ?, ?, ?, ?)`,
+			skillID, newVersion, content, compactRules, changedBy,
 		); err != nil {
 			return err
 		}
 
 		// Read back full row
 		rows, err := s.queryHook(tx, `
-			SELECT id, name, display_name, triggers, content, version, is_active, changed_by, created_at, updated_at
+			SELECT id, name, display_name, triggers, content, compact_rules, version, is_active, changed_by, created_at, updated_at
 			FROM skills WHERE id = ?`, skillID)
 		if err != nil {
 			return err
@@ -4408,7 +4426,7 @@ func (s *Store) UpdateSkill(name string, params UpdateSkillParams) (*Skill, erro
 		if rows.Next() {
 			var sk Skill
 			var isActive int
-			if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+			if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.CompactRules, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 				return err
 			}
 			sk.IsActive = isActive == 1
@@ -4429,7 +4447,7 @@ func (s *Store) UpdateSkill(name string, params UpdateSkillParams) (*Skill, erro
 // Returns nil, sql.ErrNoRows if not found.
 func (s *Store) GetSkill(name string) (*Skill, error) {
 	rows, err := s.queryHook(s.db, `
-		SELECT id, name, display_name, triggers, content, version, is_active, changed_by, created_at, updated_at
+		SELECT id, name, display_name, triggers, content, compact_rules, version, is_active, changed_by, created_at, updated_at
 		FROM skills WHERE name = ?`, name)
 	if err != nil {
 		return nil, err
@@ -4439,7 +4457,7 @@ func (s *Store) GetSkill(name string) (*Skill, error) {
 	if rows.Next() {
 		var sk Skill
 		var isActive int
-		if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.CompactRules, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 			return nil, err
 		}
 		sk.IsActive = isActive == 1
@@ -4467,7 +4485,7 @@ func (s *Store) ListSkills(params ListSkillsParams) ([]Skill, error) {
 		// FTS5 path
 		ftsQuery := sanitizeFTS(params.Query)
 		sqlQ = `
-			SELECT sk.id, sk.name, sk.display_name, sk.triggers, '' as content,
+			SELECT sk.id, sk.name, sk.display_name, sk.triggers, '' as content, '' as compact_rules,
 			       sk.version, sk.is_active, sk.changed_by, sk.created_at, sk.updated_at
 			FROM skills_fts fts
 			JOIN skills sk ON sk.id = fts.rowid
@@ -4484,9 +4502,9 @@ func (s *Store) ListSkills(params ListSkillsParams) ([]Skill, error) {
 		}
 		sqlQ += " ORDER BY fts.rank"
 	} else {
-		// Plain SELECT path (metadata only)
+		// Plain SELECT path (metadata only — compact_rules intentionally omitted)
 		sqlQ = `
-			SELECT sk.id, sk.name, sk.display_name, sk.triggers, '' as content,
+			SELECT sk.id, sk.name, sk.display_name, sk.triggers, '' as content, '' as compact_rules,
 			       sk.version, sk.is_active, sk.changed_by, sk.created_at, sk.updated_at
 			FROM skills sk WHERE sk.is_active = 1`
 
@@ -4511,7 +4529,7 @@ func (s *Store) ListSkills(params ListSkillsParams) ([]Skill, error) {
 	for rows.Next() {
 		var sk Skill
 		var isActive int
-		if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.CompactRules, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 			return nil, err
 		}
 		sk.IsActive = isActive == 1
@@ -4533,7 +4551,7 @@ func (s *Store) ListSkills(params ListSkillsParams) ([]Skill, error) {
 // Returns an empty slice (not an error) if the skill does not exist.
 func (s *Store) GetSkillVersions(name string) ([]SkillVersion, error) {
 	sqlQ := `
-		SELECT sv.id, sv.skill_id, sv.version, sv.content, sv.changed_by, sv.created_at
+		SELECT sv.id, sv.skill_id, sv.version, sv.content, sv.compact_rules, sv.changed_by, sv.created_at
 		FROM skill_versions sv
 		JOIN skills sk ON sk.id = sv.skill_id
 		WHERE sk.name = ?
@@ -4548,7 +4566,7 @@ func (s *Store) GetSkillVersions(name string) ([]SkillVersion, error) {
 	var results []SkillVersion
 	for rows.Next() {
 		var sv SkillVersion
-		if err := rows.Scan(&sv.ID, &sv.SkillID, &sv.Version, &sv.Content, &sv.ChangedBy, &sv.CreatedAt); err != nil {
+		if err := rows.Scan(&sv.ID, &sv.SkillID, &sv.Version, &sv.Content, &sv.CompactRules, &sv.ChangedBy, &sv.CreatedAt); err != nil {
 			return nil, err
 		}
 		results = append(results, sv)

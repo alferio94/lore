@@ -5558,3 +5558,296 @@ func TestMigrateSkillsCatalogTables(t *testing.T) {
 		}
 	})
 }
+
+// ─── compact-rules: Phase 1 — Schema & Migration ─────────────────────────────
+
+// Task 1.1 [RED] DDL includes compact_rules in skills and skill_versions tables
+func TestSkillsDDLHasCompactRulesColumn(t *testing.T) {
+	s := newTestStore(t)
+
+	tables := []string{"skills", "skill_versions"}
+	for _, tbl := range tables {
+		var colName string
+		err := s.db.QueryRow(
+			`SELECT name FROM pragma_table_info(?) WHERE name = 'compact_rules'`, tbl,
+		).Scan(&colName)
+		if err != nil {
+			t.Errorf("table %q: expected compact_rules column to exist, got: %v", tbl, err)
+			continue
+		}
+		if colName != "compact_rules" {
+			t.Errorf("table %q: expected column name 'compact_rules', got %q", tbl, colName)
+		}
+	}
+}
+
+// Task 1.3 [RED] Migration adds compact_rules to existing DB idempotently
+func TestCompactRulesMigrationOnExistingDB(t *testing.T) {
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = t.TempDir()
+
+	// First open — creates the DB
+	s1, err := New(cfg)
+	if err != nil {
+		t.Fatalf("first New(): %v", err)
+	}
+	// Seed a skill to verify it survives the second open
+	if _, err := s1.db.Exec(
+		`INSERT INTO skills (name, display_name, content) VALUES ('legacy-skill', 'Legacy Skill', 'old content')`,
+	); err != nil {
+		t.Fatalf("seed legacy skill: %v", err)
+	}
+	_ = s1.Close()
+
+	// Second open — migration must be idempotent (compact_rules already exists after first open)
+	s2, err := New(cfg)
+	if err != nil {
+		t.Fatalf("second New() (migration): %v", err)
+	}
+	defer s2.Close()
+
+	// compact_rules must exist in both tables
+	for _, tbl := range []string{"skills", "skill_versions"} {
+		var colName string
+		if err := s2.db.QueryRow(
+			`SELECT name FROM pragma_table_info(?) WHERE name = 'compact_rules'`, tbl,
+		).Scan(&colName); err != nil {
+			t.Errorf("after migration, table %q missing compact_rules column: %v", tbl, err)
+		}
+	}
+
+	// Existing row must survive with compact_rules = ''
+	var compactRules string
+	if err := s2.db.QueryRow(
+		`SELECT compact_rules FROM skills WHERE name = 'legacy-skill'`,
+	).Scan(&compactRules); err != nil {
+		t.Fatalf("select compact_rules from legacy-skill: %v", err)
+	}
+	if compactRules != "" {
+		t.Errorf("expected compact_rules = '' for legacy row, got %q", compactRules)
+	}
+}
+
+// ─── compact-rules: Phase 2 — Store Structs & CRUD ───────────────────────────
+
+// Task 2.1 [RED] Skill struct has CompactRules field with correct JSON tag
+func TestSkillStructHasCompactRulesField(t *testing.T) {
+	s := newTestStore(t)
+
+	skill, err := s.CreateSkill(CreateSkillParams{
+		Name:         "compact-test",
+		DisplayName:  "Compact Test",
+		Content:      "some content",
+		CompactRules: "Use table-driven tests.",
+		ChangedBy:    "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	// Marshal to JSON and verify compact_rules key exists with correct value
+	b, err := json.Marshal(skill)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	jsonStr := string(b)
+	if !strings.Contains(jsonStr, `"compact_rules"`) {
+		t.Errorf("expected JSON to contain 'compact_rules' key, got: %s", jsonStr)
+	}
+	if !strings.Contains(jsonStr, `"Use table-driven tests."`) {
+		t.Errorf("expected JSON to contain compact_rules value, got: %s", jsonStr)
+	}
+}
+
+// Task 2.3 [RED] CreateSkill persists compact_rules; GetSkill returns it
+func TestCreateSkillPersistsCompactRules(t *testing.T) {
+	s := newTestStore(t)
+
+	skill, err := s.CreateSkill(CreateSkillParams{
+		Name:         "cr-skill",
+		DisplayName:  "CR Skill",
+		Content:      "content",
+		CompactRules: "Use Given/When/Then.",
+		ChangedBy:    "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+	if skill.CompactRules != "Use Given/When/Then." {
+		t.Errorf("CreateSkill: expected CompactRules 'Use Given/When/Then.', got %q", skill.CompactRules)
+	}
+
+	// GetSkill must return compact_rules
+	fetched, err := s.GetSkill("cr-skill")
+	if err != nil {
+		t.Fatalf("GetSkill: %v", err)
+	}
+	if fetched.CompactRules != "Use Given/When/Then." {
+		t.Errorf("GetSkill: expected CompactRules 'Use Given/When/Then.', got %q", fetched.CompactRules)
+	}
+}
+
+// Triangulate: CreateSkill with empty compact_rules stores empty string and version row captures it
+func TestCreateSkillEmptyCompactRules(t *testing.T) {
+	s := newTestStore(t)
+
+	skill, err := s.CreateSkill(CreateSkillParams{
+		Name:         "empty-cr-skill",
+		DisplayName:  "Empty CR Skill",
+		Content:      "content",
+		CompactRules: "",
+		ChangedBy:    "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+	if skill.CompactRules != "" {
+		t.Errorf("expected empty CompactRules, got %q", skill.CompactRules)
+	}
+
+	// skill_versions row must also have compact_rules = ''
+	var versionCompactRules string
+	if err := s.db.QueryRow(
+		`SELECT compact_rules FROM skill_versions WHERE skill_id = ?`, skill.ID,
+	).Scan(&versionCompactRules); err != nil {
+		t.Fatalf("select compact_rules from skill_versions: %v", err)
+	}
+	if versionCompactRules != "" {
+		t.Errorf("expected skill_versions.compact_rules = '', got %q", versionCompactRules)
+	}
+}
+
+// Task 2.5 [RED] UpdateSkill updates compact_rules when non-nil
+func TestUpdateSkillCompactRulesNonNil(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.CreateSkill(CreateSkillParams{
+		Name:         "upd-cr-skill",
+		DisplayName:  "Upd CR Skill",
+		Content:      "original",
+		CompactRules: "",
+		ChangedBy:    "system",
+	}); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	newRules := "Always use RFC 2119."
+	updated, err := s.UpdateSkill("upd-cr-skill", UpdateSkillParams{
+		CompactRules: &newRules,
+		ChangedBy:    "mcp",
+	})
+	if err != nil {
+		t.Fatalf("UpdateSkill: %v", err)
+	}
+	if updated.CompactRules != "Always use RFC 2119." {
+		t.Errorf("expected CompactRules 'Always use RFC 2119.', got %q", updated.CompactRules)
+	}
+
+	// Verify the new skill_versions row captured compact_rules
+	var versionCR string
+	if err := s.db.QueryRow(
+		`SELECT compact_rules FROM skill_versions WHERE skill_id = ? AND version = 2`, updated.ID,
+	).Scan(&versionCR); err != nil {
+		t.Fatalf("select compact_rules from skill_versions v2: %v", err)
+	}
+	if versionCR != "Always use RFC 2119." {
+		t.Errorf("expected skill_versions v2.compact_rules = 'Always use RFC 2119.', got %q", versionCR)
+	}
+}
+
+// Triangulate: nil CompactRules preserves existing value
+func TestUpdateSkillCompactRulesNilPreservesExisting(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.CreateSkill(CreateSkillParams{
+		Name:         "preserve-cr-skill",
+		DisplayName:  "Preserve CR Skill",
+		Content:      "original",
+		CompactRules: "existing",
+		ChangedBy:    "system",
+	}); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	newTriggers := "new trigger"
+	updated, err := s.UpdateSkill("preserve-cr-skill", UpdateSkillParams{
+		Triggers:     &newTriggers,
+		CompactRules: nil, // no change
+		ChangedBy:    "mcp",
+	})
+	if err != nil {
+		t.Fatalf("UpdateSkill: %v", err)
+	}
+	if updated.CompactRules != "existing" {
+		t.Errorf("expected CompactRules to remain 'existing', got %q", updated.CompactRules)
+	}
+}
+
+// Task 2.7 [GREEN] ListSkills omits compact_rules (leaves it as empty string)
+func TestListSkillsOmitsCompactRules(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create skills with non-empty compact_rules
+	for _, name := range []string{"skill-a", "skill-b"} {
+		if _, err := s.CreateSkill(CreateSkillParams{
+			Name:         name,
+			DisplayName:  name,
+			Content:      "content",
+			CompactRules: "some rules",
+			ChangedBy:    "test",
+		}); err != nil {
+			t.Fatalf("CreateSkill %s: %v", name, err)
+		}
+	}
+
+	skills, err := s.ListSkills(ListSkillsParams{})
+	if err != nil {
+		t.Fatalf("ListSkills: %v", err)
+	}
+	if len(skills) != 2 {
+		t.Fatalf("expected 2 skills, got %d", len(skills))
+	}
+	for _, sk := range skills {
+		if sk.CompactRules != "" {
+			t.Errorf("ListSkills: expected CompactRules to be empty for %q, got %q", sk.Name, sk.CompactRules)
+		}
+	}
+}
+
+// Task 2.7 [GREEN] GetSkillVersions includes compact_rules
+func TestGetSkillVersionsIncludesCompactRules(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.CreateSkill(CreateSkillParams{
+		Name:         "versioned-cr-skill",
+		DisplayName:  "Versioned CR Skill",
+		Content:      "v1 content",
+		CompactRules: "v1 rules",
+		ChangedBy:    "system",
+	}); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	newRules := "v2 rules"
+	if _, err := s.UpdateSkill("versioned-cr-skill", UpdateSkillParams{
+		CompactRules: &newRules,
+		ChangedBy:    "mcp",
+	}); err != nil {
+		t.Fatalf("UpdateSkill: %v", err)
+	}
+
+	versions, err := s.GetSkillVersions("versioned-cr-skill")
+	if err != nil {
+		t.Fatalf("GetSkillVersions: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("expected 2 versions, got %d", len(versions))
+	}
+	// versions are DESC: v2 first
+	if versions[0].CompactRules != "v2 rules" {
+		t.Errorf("v2: expected CompactRules 'v2 rules', got %q", versions[0].CompactRules)
+	}
+	if versions[1].CompactRules != "v1 rules" {
+		t.Errorf("v1: expected CompactRules 'v1 rules', got %q", versions[1].CompactRules)
+	}
+}
