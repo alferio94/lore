@@ -75,6 +75,13 @@ type Stats struct {
 	Projects          []string `json:"projects"`
 }
 
+type AdminStats struct {
+	ActiveProjects       int `json:"active_projects"`
+	ActiveSkills         int `json:"active_skills"`
+	ObservationsThisWeek int `json:"observations_this_week"`
+	SessionsThisWeek     int `json:"sessions_this_week"`
+}
+
 type TimelineEntry struct {
 	ID             int64   `json:"id"`
 	SessionID      string  `json:"session_id"`
@@ -1752,6 +1759,42 @@ func (s *Store) Stats() (*Stats, error) {
 	}
 
 	return stats, nil
+}
+
+// ─── AdminStats ──────────────────────────────────────────────────────────────
+
+// AdminStats returns real-time counters for the admin dashboard.
+// Each field is computed with an independent COUNT query.
+// On error, the failed field is zero-filled; the first error is returned.
+func (s *Store) AdminStats() (AdminStats, error) {
+	var stats AdminStats
+	var firstErr error
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(DISTINCT project) FROM observations WHERE project IS NOT NULL AND deleted_at IS NULL`,
+	).Scan(&stats.ActiveProjects); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM skills WHERE is_active = 1`,
+	).Scan(&stats.ActiveSkills); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND created_at >= datetime('now', '-7 days')`,
+	).Scan(&stats.ObservationsThisWeek); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE started_at >= datetime('now', '-7 days')`,
+	).Scan(&stats.SessionsThisWeek); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	return stats, firstErr
 }
 
 // ─── Context Formatting ─────────────────────────────────────────────────────

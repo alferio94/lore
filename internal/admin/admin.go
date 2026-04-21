@@ -22,16 +22,16 @@ import (
 
 // AdminConfig holds all configuration needed by the admin package.
 type AdminConfig struct {
-	Store               *store.Store
-	JWTSecret           []byte         // from LORE_JWT_SECRET or auto-generated
-	GoogleClientID      string         // from LORE_GOOGLE_CLIENT_ID
-	GoogleClientSecret  string         // from LORE_GOOGLE_CLIENT_SECRET
-	GitHubClientID      string         // from LORE_GITHUB_CLIENT_ID
-	GitHubClientSecret  string         // from LORE_GITHUB_CLIENT_SECRET
-	DevAuth             bool           // --dev-auth flag
-	BaseURL             string         // e.g. "http://localhost:7437"
-	GoogleOAuth         *oauth2.Config // nil if creds not configured
-	GithubOAuth         *oauth2.Config // nil if creds not configured
+	Store              *store.Store
+	JWTSecret          []byte         // from LORE_JWT_SECRET or auto-generated
+	GoogleClientID     string         // from LORE_GOOGLE_CLIENT_ID
+	GoogleClientSecret string         // from LORE_GOOGLE_CLIENT_SECRET
+	GitHubClientID     string         // from LORE_GITHUB_CLIENT_ID
+	GitHubClientSecret string         // from LORE_GITHUB_CLIENT_SECRET
+	DevAuth            bool           // --dev-auth flag
+	BaseURL            string         // e.g. "http://localhost:7437"
+	GoogleOAuth        *oauth2.Config // nil if creds not configured
+	GithubOAuth        *oauth2.Config // nil if creds not configured
 }
 
 // ─── Claims ──────────────────────────────────────────────────────────────────
@@ -84,6 +84,9 @@ func Mount(mux *http.ServeMux, cfg AdminConfig) {
 	mux.HandleFunc("POST /admin/api/skills", requireRole(cfg.JWTSecret, "tech_lead", h.handleCreateSkill))
 	mux.HandleFunc("PUT /admin/api/skills/{name}", requireRole(cfg.JWTSecret, "tech_lead", h.handleUpdateSkill))
 	mux.HandleFunc("DELETE /admin/api/skills/{name}", requireRole(cfg.JWTSecret, "admin", h.handleDeleteSkill))
+
+	// ── Stats API ──
+	mux.HandleFunc("GET /admin/api/stats", requireRole(cfg.JWTSecret, "viewer", h.handleStats))
 
 	// ── Projects API (read-only) ──
 	mux.HandleFunc("GET /admin/api/projects", requireRole(cfg.JWTSecret, "viewer", h.handleListProjects))
