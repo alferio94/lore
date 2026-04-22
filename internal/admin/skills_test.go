@@ -71,8 +71,6 @@ func seedSkill(t *testing.T, s *store.Store, name string) *store.Skill {
 	sk, err := s.CreateSkill(store.CreateSkillParams{
 		Name:        name,
 		DisplayName: name,
-		Category:    "test",
-		Stack:       "go",
 		Triggers:    "trigger",
 		Content:     "content for " + name,
 		ChangedBy:   "test",
@@ -452,6 +450,315 @@ func TestHandleDeleteSkillReturns403ForTechLead(t *testing.T) {
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status: got %d, want 403", w.Code)
+	}
+}
+
+// ─── Task 3.9 RED: createSkill/updateSkill with stack_ids/category_ids ───────
+
+// TestHandleCreateSkillWithStackIDsReturns201 verifies that POST /admin/api/skills
+// correctly accepts stack_ids and category_ids arrays and persists relationships.
+func TestHandleCreateSkillWithStackIDsReturns201(t *testing.T) {
+	s := newTestStoreForAdmin(t)
+
+	// Create catalog entries first
+	angular, err := s.CreateStack("angular", "Angular")
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+	tutorial, err := s.CreateCategory("tutorial", "Tutorial")
+	if err != nil {
+		t.Fatalf("CreateCategory: %v", err)
+	}
+
+	cfg := makeSkillsConfig(s)
+	h := &adminHandler{cfg: cfg}
+
+	body := strings.NewReader(`{
+		"name": "angular-intro",
+		"content": "intro content",
+		"stack_ids": [` + formatInt(angular.ID) + `],
+		"category_ids": [` + formatInt(tutorial.ID) + `]
+	}`)
+	req := newTestRequest(t, "POST", "/admin/api/skills", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(makeSkillsCookie(t, cfg, "tech_lead"))
+	w := newTestResponseRecorder()
+
+	authed := requireRole(cfg.JWTSecret, "tech_lead", h.handleCreateSkill)
+	authed(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("status: got %d, want 201 (body: %s)", w.Code, w.Body.String())
+	}
+
+	var sk store.Skill
+	if err := json.NewDecoder(w.Body).Decode(&sk); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if sk.Name != "angular-intro" {
+		t.Errorf("name: got %q, want %q", sk.Name, "angular-intro")
+	}
+	if len(sk.Stacks) != 1 {
+		t.Errorf("stacks: got %d, want 1", len(sk.Stacks))
+	} else if sk.Stacks[0].Name != "angular" {
+		t.Errorf("stacks[0].name: got %q, want %q", sk.Stacks[0].Name, "angular")
+	}
+	if len(sk.Categories) != 1 {
+		t.Errorf("categories: got %d, want 1", len(sk.Categories))
+	} else if sk.Categories[0].Name != "tutorial" {
+		t.Errorf("categories[0].name: got %q, want %q", sk.Categories[0].Name, "tutorial")
+	}
+}
+
+// TestHandleUpdateSkillWithStackIDsReturns200 verifies that PUT /admin/api/skills/{name}
+// correctly accepts stack_ids arrays and replaces existing relationships.
+func TestHandleUpdateSkillWithStackIDsReturns200(t *testing.T) {
+	s := newTestStoreForAdmin(t)
+
+	// Create catalog entries
+	angular, err := s.CreateStack("angular-upd", "Angular")
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+	nestjs, err := s.CreateStack("nestjs-upd", "NestJS")
+	if err != nil {
+		t.Fatalf("CreateStack nestjs: %v", err)
+	}
+
+	// Create skill with initial stack
+	sk, err := s.CreateSkill(store.CreateSkillParams{
+		Name:      "skill-to-update-stacks",
+		Content:   "content",
+		StackIDs:  []int64{angular.ID},
+		ChangedBy: "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	cfg := makeSkillsConfig(s)
+	h := &adminHandler{cfg: cfg}
+
+	// Update: replace stacks with [nestjs]
+	body := strings.NewReader(`{"stack_ids": [` + formatInt(nestjs.ID) + `]}`)
+	req := newTestRequest(t, "PUT", "/admin/api/skills/skill-to-update-stacks", body)
+	req = withPathValue(req, "name", sk.Name)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(makeSkillsCookie(t, cfg, "tech_lead"))
+	w := newTestResponseRecorder()
+
+	authed := requireRole(cfg.JWTSecret, "tech_lead", h.handleUpdateSkill)
+	authed(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status: got %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+
+	var updated store.Skill
+	if err := json.NewDecoder(w.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(updated.Stacks) != 1 {
+		t.Errorf("stacks: got %d, want 1", len(updated.Stacks))
+	} else if updated.Stacks[0].Name != "nestjs-upd" {
+		t.Errorf("stacks[0].name: got %q, want %q", updated.Stacks[0].Name, "nestjs-upd")
+	}
+}
+
+// TestHandleCreateSkillResponseHasEmptyArraysForStacks verifies that a skill
+// created without stack_ids/category_ids returns empty arrays (not null).
+func TestHandleCreateSkillResponseHasEmptyArraysForStacks(t *testing.T) {
+	s := newTestStoreForAdmin(t)
+	cfg := makeSkillsConfig(s)
+	h := &adminHandler{cfg: cfg}
+
+	body := strings.NewReader(`{"name":"plain-skill","content":"plain content"}`)
+	req := newTestRequest(t, "POST", "/admin/api/skills", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(makeSkillsCookie(t, cfg, "tech_lead"))
+	w := newTestResponseRecorder()
+
+	authed := requireRole(cfg.JWTSecret, "tech_lead", h.handleCreateSkill)
+	authed(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("status: got %d, want 201 (body: %s)", w.Code, w.Body.String())
+	}
+
+	// Decode as raw JSON to check for null vs empty array
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(w.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	stacksRaw, ok := raw["stacks"]
+	if !ok {
+		t.Fatal("response missing 'stacks' field")
+	}
+	if string(stacksRaw) == "null" {
+		t.Error("stacks should be [] not null")
+	}
+
+	catsRaw, ok := raw["categories"]
+	if !ok {
+		t.Fatal("response missing 'categories' field")
+	}
+	if string(catsRaw) == "null" {
+		t.Error("categories should be [] not null")
+	}
+}
+
+// formatInt converts int64 to string for use in JSON literals in tests.
+func formatInt(i int64) string {
+	return sql.NullString{String: "", Valid: false}.String + strings.TrimSpace(strings.Repeat(" ", 0)) + jsonInt64(i)
+}
+
+// jsonInt64 converts int64 to its string representation for JSON embedding.
+func jsonInt64(i int64) string {
+	var buf [20]byte
+	pos := len(buf)
+	for i >= 10 {
+		pos--
+		buf[pos] = byte('0' + i%10)
+		i /= 10
+	}
+	pos--
+	buf[pos] = byte('0' + i)
+	return string(buf[pos:])
+}
+
+// ─── compact-rules Phase 3: Admin API ────────────────────────────────────────
+
+// Task 3.1 RED: POST /admin/api/skills with compact_rules persists it; without
+// compact_rules the request still succeeds with empty string.
+
+func TestHandleCreateSkillPersistsCompactRules(t *testing.T) {
+	s := newTestStoreForAdmin(t)
+	cfg := makeSkillsConfig(s)
+	h := &adminHandler{cfg: cfg}
+
+	body := strings.NewReader(`{"name":"cr-skill","content":"some content","compact_rules":"use table-driven tests"}`)
+	req := newTestRequest(t, "POST", "/admin/api/skills", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(makeSkillsCookie(t, cfg, "tech_lead"))
+	w := newTestResponseRecorder()
+
+	authed := requireRole(cfg.JWTSecret, "tech_lead", h.handleCreateSkill)
+	authed(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("status: got %d, want 201 (body: %s)", w.Code, w.Body.String())
+	}
+
+	var sk store.Skill
+	if err := json.NewDecoder(w.Body).Decode(&sk); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if sk.CompactRules != "use table-driven tests" {
+		t.Errorf("compact_rules: got %q, want %q", sk.CompactRules, "use table-driven tests")
+	}
+}
+
+func TestHandleCreateSkillWithoutCompactRulesSucceeds(t *testing.T) {
+	s := newTestStoreForAdmin(t)
+	cfg := makeSkillsConfig(s)
+	h := &adminHandler{cfg: cfg}
+
+	body := strings.NewReader(`{"name":"no-cr-skill","content":"some content"}`)
+	req := newTestRequest(t, "POST", "/admin/api/skills", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(makeSkillsCookie(t, cfg, "tech_lead"))
+	w := newTestResponseRecorder()
+
+	authed := requireRole(cfg.JWTSecret, "tech_lead", h.handleCreateSkill)
+	authed(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("status: got %d, want 201 (body: %s)", w.Code, w.Body.String())
+	}
+
+	var sk store.Skill
+	if err := json.NewDecoder(w.Body).Decode(&sk); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if sk.CompactRules != "" {
+		t.Errorf("compact_rules: got %q, want empty string", sk.CompactRules)
+	}
+}
+
+// Task 3.3 RED: PUT /admin/api/skills/{name} with only compact_rules returns 200;
+// hasAnyField() returns true when only compact_rules is set.
+
+func TestHandleUpdateSkillWithOnlyCompactRulesReturns200(t *testing.T) {
+	s := newTestStoreForAdmin(t)
+	seedSkill(t, s, "update-cr-skill")
+
+	cfg := makeSkillsConfig(s)
+	h := &adminHandler{cfg: cfg}
+
+	body := strings.NewReader(`{"compact_rules":"always use RFC 2119"}`)
+	req := newTestRequest(t, "PUT", "/admin/api/skills/update-cr-skill", body)
+	req = withPathValue(req, "name", "update-cr-skill")
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(makeSkillsCookie(t, cfg, "tech_lead"))
+	w := newTestResponseRecorder()
+
+	authed := requireRole(cfg.JWTSecret, "tech_lead", h.handleUpdateSkill)
+	authed(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status: got %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+
+	var sk store.Skill
+	if err := json.NewDecoder(w.Body).Decode(&sk); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if sk.CompactRules != "always use RFC 2119" {
+		t.Errorf("compact_rules: got %q, want %q", sk.CompactRules, "always use RFC 2119")
+	}
+}
+
+func TestHasAnyFieldReturnsTrueWhenOnlyCompactRulesSet(t *testing.T) {
+	cr := "some rules"
+	u := &updateSkillRequest{CompactRules: &cr}
+	if !u.hasAnyField() {
+		t.Error("hasAnyField() should return true when only CompactRules is set")
+	}
+}
+
+func TestHandleUpdateSkillNullCompactRulesPreservesExisting(t *testing.T) {
+	s := newTestStoreForAdmin(t)
+	// Create skill with compact_rules set
+	_, err := s.CreateSkill(store.CreateSkillParams{
+		Name:         "cr-preserve",
+		Content:      "content",
+		CompactRules: "existing rules",
+		ChangedBy:    "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	cfg := makeSkillsConfig(s)
+	h := &adminHandler{cfg: cfg}
+
+	// Send null compact_rules — should preserve existing value
+	body := strings.NewReader(`{"compact_rules":null}`)
+	req := newTestRequest(t, "PUT", "/admin/api/skills/cr-preserve", body)
+	req = withPathValue(req, "name", "cr-preserve")
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(makeSkillsCookie(t, cfg, "tech_lead"))
+	w := newTestResponseRecorder()
+
+	authed := requireRole(cfg.JWTSecret, "tech_lead", h.handleUpdateSkill)
+	authed(w, req)
+
+	// null compact_rules means no change — but we need another field too or 422
+	// Per spec: `{"compact_rules": null}` → UpdateSkillParams.CompactRules = nil (no change)
+	// but hasAnyField() with null means the field is absent/nil → still 422
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status: got %d, want 422 when all fields are null", w.Code)
 	}
 }
 

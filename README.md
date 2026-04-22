@@ -76,6 +76,20 @@ Full per-agent config, Memory Protocol, and compaction survival → [docs/AGENT-
 
 That's it. No Node.js, no Python, no Docker. **One binary, one SQLite file.**
 
+## Docker Staging: SQLite WAL Persistence (Critical)
+
+When running Lore in containers, `LORE_DATA_DIR` is the SQLite data directory and **must** be mounted to a persistent volume.
+
+Lore uses SQLite WAL mode, which writes three files in the same directory:
+
+- `lore.db`
+- `lore.db-wal`
+- `lore.db-shm`
+
+All three files must live in the **same persistent volume path** under `LORE_DATA_DIR`. If only `lore.db` is persisted (or sidecar files are lost between restarts/recreates), you can see apparent data loss or inconsistent state after container restart.
+
+`docker-compose.staging.yml` already handles this correctly with the named volume mount `lore-data:/data` (and `LORE_DATA_DIR=/data`).
+
 ## How It Works
 
 ```

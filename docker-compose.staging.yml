@@ -1,0 +1,25 @@
+services:
+  lore:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    env_file:
+      - .env.staging
+    ports:
+      - "7437:7437"
+    volumes:
+      # SQLite WAL mode creates lore.db, lore.db-wal, and lore.db-shm.
+      # All three files must live on the same persistent volume (LORE_DATA_DIR).
+      # Removing this volume mount risks apparent data loss on container restart.
+      - lore-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7437/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  lore-data:

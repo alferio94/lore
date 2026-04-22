@@ -6,6 +6,7 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -73,6 +74,13 @@ type Stats struct {
 	TotalObservations int      `json:"total_observations"`
 	TotalPrompts      int      `json:"total_prompts"`
 	Projects          []string `json:"projects"`
+}
+
+type AdminStats struct {
+	ActiveProjects       int `json:"active_projects"`
+	ActiveSkills         int `json:"active_skills"`
+	ObservationsThisWeek int `json:"observations_this_week"`
+	SessionsThisWeek     int `json:"sessions_this_week"`
 }
 
 type TimelineEntry struct {
@@ -146,28 +154,50 @@ type AddPromptParams struct {
 
 // ─── Skills ──────────────────────────────────────────────────────────────────
 
-type Skill struct {
+// Stack represents a technology stack entry in the catalog.
+type Stack struct {
 	ID          int64  `json:"id"`
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
-	Category    string `json:"category"`
-	Stack       string `json:"stack"`
-	Triggers    string `json:"triggers"`
-	Content     string `json:"content"`
-	Version     int    `json:"version"`
-	IsActive    bool   `json:"is_active"`
-	ChangedBy   string `json:"changed_by"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+}
+
+// Category represents a skill category entry in the catalog.
+type Category struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+}
+
+// StackRef is an alias for Stack used in Skill.Stacks for semantic clarity.
+type StackRef = Stack
+
+// CategoryRef is an alias for Category used in Skill.Categories for semantic clarity.
+type CategoryRef = Category
+
+type Skill struct {
+	ID           int64         `json:"id"`
+	Name         string        `json:"name"`
+	DisplayName  string        `json:"display_name"`
+	Stacks       []StackRef    `json:"stacks"`
+	Categories   []CategoryRef `json:"categories"`
+	Triggers     string        `json:"triggers"`
+	Content      string        `json:"content"`
+	CompactRules string        `json:"compact_rules"`
+	Version      int           `json:"version"`
+	IsActive     bool          `json:"is_active"`
+	ChangedBy    string        `json:"changed_by"`
+	CreatedAt    string        `json:"created_at"`
+	UpdatedAt    string        `json:"updated_at"`
 }
 
 type SkillVersion struct {
-	ID        int64  `json:"id"`
-	SkillID   int64  `json:"skill_id"`
-	Version   int    `json:"version"`
-	Content   string `json:"content"`
-	ChangedBy string `json:"changed_by"`
-	CreatedAt string `json:"created_at"`
+	ID           int64  `json:"id"`
+	SkillID      int64  `json:"skill_id"`
+	Version      int    `json:"version"`
+	Content      string `json:"content"`
+	CompactRules string `json:"compact_rules"`
+	ChangedBy    string `json:"changed_by"`
+	CreatedAt    string `json:"created_at"`
 }
 
 type User struct {
@@ -182,28 +212,30 @@ type User struct {
 }
 
 type ListSkillsParams struct {
-	Stack    string `json:"stack,omitempty"`
-	Category string `json:"category,omitempty"`
-	Query    string `json:"query,omitempty"` // FTS5 search when non-empty
+	StackID    *int64 `json:"stack_id,omitempty"`
+	CategoryID *int64 `json:"category_id,omitempty"`
+	Query      string `json:"query,omitempty"` // FTS5 search when non-empty
 }
 
 type CreateSkillParams struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Category    string `json:"category"`
-	Stack       string `json:"stack"`
-	Triggers    string `json:"triggers"`
-	Content     string `json:"content"`
-	ChangedBy   string `json:"changed_by"`
+	Name         string  `json:"name"`
+	DisplayName  string  `json:"display_name"`
+	StackIDs     []int64 `json:"stack_ids"`
+	CategoryIDs  []int64 `json:"category_ids"`
+	Triggers     string  `json:"triggers"`
+	Content      string  `json:"content"`
+	CompactRules string  `json:"compact_rules"`
+	ChangedBy    string  `json:"changed_by"`
 }
 
 type UpdateSkillParams struct {
-	DisplayName *string `json:"display_name,omitempty"`
-	Category    *string `json:"category,omitempty"`
-	Stack       *string `json:"stack,omitempty"`
-	Triggers    *string `json:"triggers,omitempty"`
-	Content     *string `json:"content,omitempty"`
-	ChangedBy   string  `json:"changed_by"`
+	DisplayName  *string  `json:"display_name,omitempty"`
+	StackIDs     *[]int64 `json:"stack_ids,omitempty"`    // nil = no change, empty = clear all
+	CategoryIDs  *[]int64 `json:"category_ids,omitempty"` // nil = no change, empty = clear all
+	Triggers     *string  `json:"triggers,omitempty"`
+	Content      *string  `json:"content,omitempty"`
+	CompactRules *string  `json:"compact_rules,omitempty"` // nil = no change
+	ChangedBy    string   `json:"changed_by"`
 }
 
 const (
@@ -496,6 +528,15 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// Ping verifies that the store database is reachable.
+func (s *Store) Ping(ctx context.Context) error {
+	var n int
+	if err := s.db.QueryRowContext(ctx, "SELECT 1").Scan(&n); err != nil {
+		return err
+	}
+	return nil
+}
+
 // ─── Migrations ──────────────────────────────────────────────────────────────
 
 func (s *Store) migrate() error {
@@ -600,31 +641,59 @@ func (s *Store) migrate() error {
 		);
 
 		CREATE TABLE IF NOT EXISTS skills (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			name          TEXT    NOT NULL UNIQUE,
+			display_name  TEXT    NOT NULL,
+			triggers      TEXT    NOT NULL DEFAULT '',
+			content       TEXT    NOT NULL,
+			compact_rules TEXT    NOT NULL DEFAULT '',
+			version       INTEGER NOT NULL DEFAULT 1,
+			is_active     INTEGER NOT NULL DEFAULT 1,
+			changed_by    TEXT    NOT NULL DEFAULT 'system',
+			created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+			updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+		);
+		CREATE INDEX IF NOT EXISTS idx_skills_name   ON skills(name);
+		CREATE INDEX IF NOT EXISTS idx_skills_active ON skills(is_active);
+
+		CREATE TABLE IF NOT EXISTS stacks (
 			id           INTEGER PRIMARY KEY AUTOINCREMENT,
 			name         TEXT    NOT NULL UNIQUE,
-			display_name TEXT    NOT NULL,
-			category     TEXT    NOT NULL DEFAULT '',
-			stack        TEXT    NOT NULL DEFAULT '',
-			triggers     TEXT    NOT NULL DEFAULT '',
-			content      TEXT    NOT NULL,
-			version      INTEGER NOT NULL DEFAULT 1,
-			is_active    INTEGER NOT NULL DEFAULT 1,
-			changed_by   TEXT    NOT NULL DEFAULT 'system',
-			created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
-			updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+			display_name TEXT    NOT NULL
 		);
-		CREATE INDEX IF NOT EXISTS idx_skills_name     ON skills(name);
-		CREATE INDEX IF NOT EXISTS idx_skills_stack    ON skills(stack);
-		CREATE INDEX IF NOT EXISTS idx_skills_category ON skills(category);
-		CREATE INDEX IF NOT EXISTS idx_skills_active   ON skills(is_active);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_stacks_name ON stacks(name);
+
+		CREATE TABLE IF NOT EXISTS categories (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			name         TEXT    NOT NULL UNIQUE,
+			display_name TEXT    NOT NULL
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_name ON categories(name);
+
+		CREATE TABLE IF NOT EXISTS skill_stacks (
+			skill_id INTEGER NOT NULL,
+			stack_id INTEGER NOT NULL,
+			PRIMARY KEY (skill_id, stack_id),
+			FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE,
+			FOREIGN KEY (stack_id) REFERENCES stacks(id) ON DELETE CASCADE
+		);
+
+		CREATE TABLE IF NOT EXISTS skill_categories (
+			skill_id    INTEGER NOT NULL,
+			category_id INTEGER NOT NULL,
+			PRIMARY KEY (skill_id, category_id),
+			FOREIGN KEY (skill_id)    REFERENCES skills(id)     ON DELETE CASCADE,
+			FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
+		);
 
 		CREATE TABLE IF NOT EXISTS skill_versions (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
-			skill_id   INTEGER NOT NULL,
-			version    INTEGER NOT NULL,
-			content    TEXT    NOT NULL,
-			changed_by TEXT    NOT NULL DEFAULT 'system',
-			created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			skill_id      INTEGER NOT NULL,
+			version       INTEGER NOT NULL,
+			content       TEXT    NOT NULL,
+			compact_rules TEXT    NOT NULL DEFAULT '',
+			changed_by    TEXT    NOT NULL DEFAULT 'system',
+			created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
 			FOREIGN KEY (skill_id) REFERENCES skills(id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_skill_versions_skill ON skill_versions(skill_id, version DESC);
@@ -634,8 +703,6 @@ func (s *Store) migrate() error {
 			display_name,
 			triggers,
 			content,
-			stack,
-			category,
 			content='skills',
 			content_rowid='id'
 		);
@@ -813,6 +880,19 @@ func (s *Store) migrate() error {
 		}
 	}
 
+	// Migrate legacy skills schema (stack/category columns → catalog tables)
+	if err := s.migrateSkillsCatalogTables(); err != nil {
+		return err
+	}
+
+	// Add compact_rules column to skills and skill_versions (idempotent — addColumnIfNotExists)
+	if err := s.addColumnIfNotExists("skills", "compact_rules", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.addColumnIfNotExists("skill_versions", "compact_rules", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+
 	// Skills FTS triggers (separate idempotent check)
 	var skillsTrigger string
 	err = s.db.QueryRow(
@@ -822,20 +902,20 @@ func (s *Store) migrate() error {
 	if err == sql.ErrNoRows {
 		skillsTriggers := `
 			CREATE TRIGGER skills_fts_insert AFTER INSERT ON skills BEGIN
-				INSERT INTO skills_fts(rowid, name, display_name, triggers, content, stack, category)
-				VALUES (new.id, new.name, new.display_name, new.triggers, new.content, new.stack, new.category);
+				INSERT INTO skills_fts(rowid, name, display_name, triggers, content)
+				VALUES (new.id, new.name, new.display_name, new.triggers, new.content);
 			END;
 
 			CREATE TRIGGER skills_fts_delete AFTER DELETE ON skills BEGIN
-				INSERT INTO skills_fts(skills_fts, rowid, name, display_name, triggers, content, stack, category)
-				VALUES ('delete', old.id, old.name, old.display_name, old.triggers, old.content, old.stack, old.category);
+				INSERT INTO skills_fts(skills_fts, rowid, name, display_name, triggers, content)
+				VALUES ('delete', old.id, old.name, old.display_name, old.triggers, old.content);
 			END;
 
 			CREATE TRIGGER skills_fts_update AFTER UPDATE ON skills BEGIN
-				INSERT INTO skills_fts(skills_fts, rowid, name, display_name, triggers, content, stack, category)
-				VALUES ('delete', old.id, old.name, old.display_name, old.triggers, old.content, old.stack, old.category);
-				INSERT INTO skills_fts(rowid, name, display_name, triggers, content, stack, category)
-				VALUES (new.id, new.name, new.display_name, new.triggers, new.content, new.stack, new.category);
+				INSERT INTO skills_fts(skills_fts, rowid, name, display_name, triggers, content)
+				VALUES ('delete', old.id, old.name, old.display_name, old.triggers, old.content);
+				INSERT INTO skills_fts(rowid, name, display_name, triggers, content)
+				VALUES (new.id, new.name, new.display_name, new.triggers, new.content);
 			END;
 		`
 		if _, err := s.execHook(s.db, skillsTriggers); err != nil {
@@ -1752,6 +1832,42 @@ func (s *Store) Stats() (*Stats, error) {
 	}
 
 	return stats, nil
+}
+
+// ─── AdminStats ──────────────────────────────────────────────────────────────
+
+// AdminStats returns real-time counters for the admin dashboard.
+// Each field is computed with an independent COUNT query.
+// On error, the failed field is zero-filled; the first error is returned.
+func (s *Store) AdminStats() (AdminStats, error) {
+	var stats AdminStats
+	var firstErr error
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(DISTINCT project) FROM observations WHERE project IS NOT NULL AND deleted_at IS NULL`,
+	).Scan(&stats.ActiveProjects); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM skills WHERE is_active = 1`,
+	).Scan(&stats.ActiveSkills); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND created_at >= datetime('now', '-7 days')`,
+	).Scan(&stats.ObservationsThisWeek); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE started_at >= datetime('now', '-7 days')`,
+	).Scan(&stats.SessionsThisWeek); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	return stats, firstErr
 }
 
 // ─── Context Formatting ─────────────────────────────────────────────────────
@@ -3159,6 +3275,277 @@ func (s *Store) addColumnIfNotExists(tableName, columnName, definition string) e
 	return err
 }
 
+// migrateSkillsCatalogTables migrates the skills table from the legacy schema
+// (with free-text stack/category columns) to the normalized catalog schema
+// (stacks, categories, skill_stacks, skill_categories join tables).
+//
+// Guard: checks if skills.stack column still exists. If not, the migration
+// has already run — returns nil immediately (idempotent).
+//
+// All work executes inside a single SQLite transaction.
+func (s *Store) migrateSkillsCatalogTables() error {
+	// Idempotency guard: check if skills.stack column exists
+	rows, err := s.queryItHook(s.db, "PRAGMA table_info(skills)")
+	if err != nil {
+		return fmt.Errorf("migrate catalog tables: pragma table_info: %w", err)
+	}
+	defer rows.Close()
+
+	var hasStackCol bool
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("migrate catalog tables: scan column: %w", err)
+		}
+		if name == "stack" {
+			hasStackCol = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("migrate catalog tables: iterate columns: %w", err)
+	}
+	rows.Close()
+
+	if !hasStackCol {
+		// Already migrated — no-op
+		return nil
+	}
+
+	tx, err := s.beginTxHook()
+	if err != nil {
+		return fmt.Errorf("migrate catalog tables: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Step 3-6: Create catalog and join tables (IF NOT EXISTS so they're safe on re-run)
+	if _, err := s.execHook(tx, `
+		CREATE TABLE IF NOT EXISTS stacks (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			name         TEXT    NOT NULL UNIQUE,
+			display_name TEXT    NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS categories (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			name         TEXT    NOT NULL UNIQUE,
+			display_name TEXT    NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS skill_stacks (
+			skill_id INTEGER NOT NULL,
+			stack_id INTEGER NOT NULL,
+			PRIMARY KEY (skill_id, stack_id),
+			FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE,
+			FOREIGN KEY (stack_id) REFERENCES stacks(id) ON DELETE CASCADE
+		);
+		CREATE TABLE IF NOT EXISTS skill_categories (
+			skill_id    INTEGER NOT NULL,
+			category_id INTEGER NOT NULL,
+			PRIMARY KEY (skill_id, category_id),
+			FOREIGN KEY (skill_id)    REFERENCES skills(id)     ON DELETE CASCADE,
+			FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
+		);
+	`); err != nil {
+		return fmt.Errorf("migrate catalog tables: create catalog tables: %w", err)
+	}
+
+	// Step 7: Parse comma-separated stack/category values and insert catalog rows + join rows
+	skillRows, err := tx.Query("SELECT id, stack, category FROM skills")
+	if err != nil {
+		return fmt.Errorf("migrate catalog tables: select legacy skills: %w", err)
+	}
+	type legacySkillData struct {
+		id       int64
+		stack    string
+		category string
+	}
+	var legacySkills []legacySkillData
+	for skillRows.Next() {
+		var d legacySkillData
+		if err := skillRows.Scan(&d.id, &d.stack, &d.category); err != nil {
+			skillRows.Close()
+			return fmt.Errorf("migrate catalog tables: scan skill row: %w", err)
+		}
+		legacySkills = append(legacySkills, d)
+	}
+	skillRows.Close()
+	if err := skillRows.Err(); err != nil {
+		return fmt.Errorf("migrate catalog tables: iterate skill rows: %w", err)
+	}
+
+	// Step 8-11: CREATE skills_new without stack/category, copy data, drop old, rename.
+	// IMPORTANT: Do this BEFORE populating join rows to avoid cascade deletes when
+	// dropping the old skills table (which would wipe skill_stacks/skill_categories).
+	//
+	// SQLite requires PRAGMA foreign_keys to be changed outside a transaction.
+	// skill_versions has REFERENCES skills(id) without ON DELETE CASCADE, which
+	// blocks DROP TABLE skills. We commit the current TX, temporarily disable FK
+	// enforcement for the DROP/RENAME, then re-enable it and open a new TX.
+	if err := s.commitHook(tx); err != nil {
+		return fmt.Errorf("migrate catalog tables: pre-rename commit: %w", err)
+	}
+
+	// Temporarily disable FK enforcement for the DROP TABLE operation.
+	if _, err := s.execHook(s.db, `PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("migrate catalog tables: disable fk: %w", err)
+	}
+
+	_, renameErr := s.execHook(s.db, `
+		CREATE TABLE skills_new (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			name         TEXT    NOT NULL UNIQUE,
+			display_name TEXT    NOT NULL,
+			triggers     TEXT    NOT NULL DEFAULT '',
+			content      TEXT    NOT NULL,
+			version      INTEGER NOT NULL DEFAULT 1,
+			is_active    INTEGER NOT NULL DEFAULT 1,
+			changed_by   TEXT    NOT NULL DEFAULT 'system',
+			created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+			updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+		);
+		INSERT INTO skills_new (id, name, display_name, triggers, content, version, is_active, changed_by, created_at, updated_at)
+		SELECT id, name, display_name, triggers, content, version, is_active, changed_by, created_at, updated_at
+		FROM skills;
+		DROP TABLE skills;
+		ALTER TABLE skills_new RENAME TO skills;
+	`)
+
+	// Always re-enable FK enforcement.
+	if _, fkErr := s.execHook(s.db, `PRAGMA foreign_keys = ON`); fkErr != nil {
+		return fmt.Errorf("migrate catalog tables: re-enable fk: %w", fkErr)
+	}
+
+	if renameErr != nil {
+		return fmt.Errorf("migrate catalog tables: rename skills table: %w", renameErr)
+	}
+
+	// Open a new transaction for the remaining steps (catalog population + indexes + FTS rebuild).
+	tx2, err := s.beginTxHook()
+	if err != nil {
+		return fmt.Errorf("migrate catalog tables: begin post-rename tx: %w", err)
+	}
+	defer tx2.Rollback()
+	tx = tx2
+
+	// NOW populate catalog entries and join rows (AFTER rename so FKs point to new skills table)
+	for _, sk := range legacySkills {
+		// Process stacks
+		for _, rawName := range strings.Split(sk.stack, ",") {
+			name := strings.TrimSpace(rawName)
+			if name == "" {
+				continue
+			}
+			// Derive display_name by capitalizing first letter
+			displayName := strings.ToUpper(name[:1]) + name[1:]
+
+			// Upsert into stacks (INSERT OR IGNORE keeps uniqueness)
+			if _, err := s.execHook(tx,
+				`INSERT OR IGNORE INTO stacks (name, display_name) VALUES (?, ?)`,
+				name, displayName,
+			); err != nil {
+				return fmt.Errorf("migrate catalog tables: insert stack %q: %w", name, err)
+			}
+
+			// Get the stack ID
+			var stackID int64
+			if err := tx.QueryRow(`SELECT id FROM stacks WHERE name = ?`, name).Scan(&stackID); err != nil {
+				return fmt.Errorf("migrate catalog tables: get stack id %q: %w", name, err)
+			}
+
+			// Insert join row (INSERT OR IGNORE for idempotency)
+			if _, err := s.execHook(tx,
+				`INSERT OR IGNORE INTO skill_stacks (skill_id, stack_id) VALUES (?, ?)`,
+				sk.id, stackID,
+			); err != nil {
+				return fmt.Errorf("migrate catalog tables: insert skill_stacks: %w", err)
+			}
+		}
+
+		// Process categories
+		for _, rawName := range strings.Split(sk.category, ",") {
+			name := strings.TrimSpace(rawName)
+			if name == "" {
+				continue
+			}
+			displayName := strings.ToUpper(name[:1]) + name[1:]
+
+			if _, err := s.execHook(tx,
+				`INSERT OR IGNORE INTO categories (name, display_name) VALUES (?, ?)`,
+				name, displayName,
+			); err != nil {
+				return fmt.Errorf("migrate catalog tables: insert category %q: %w", name, err)
+			}
+
+			var catID int64
+			if err := tx.QueryRow(`SELECT id FROM categories WHERE name = ?`, name).Scan(&catID); err != nil {
+				return fmt.Errorf("migrate catalog tables: get category id %q: %w", name, err)
+			}
+
+			if _, err := s.execHook(tx,
+				`INSERT OR IGNORE INTO skill_categories (skill_id, category_id) VALUES (?, ?)`,
+				sk.id, catID,
+			); err != nil {
+				return fmt.Errorf("migrate catalog tables: insert skill_categories: %w", err)
+			}
+		}
+	}
+
+	// Step 12: Recreate indexes on skills
+	if _, err := s.execHook(tx, `
+		CREATE INDEX IF NOT EXISTS idx_skills_name   ON skills(name);
+		CREATE INDEX IF NOT EXISTS idx_skills_active ON skills(is_active);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_stacks_name     ON stacks(name);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_name ON categories(name);
+	`); err != nil {
+		return fmt.Errorf("migrate catalog tables: recreate indexes: %w", err)
+	}
+
+	// Step 13: Drop old FTS triggers + table, recreate without stack/category, repopulate
+	if _, err := s.execHook(tx, `
+		DROP TRIGGER IF EXISTS skills_fts_insert;
+		DROP TRIGGER IF EXISTS skills_fts_update;
+		DROP TRIGGER IF EXISTS skills_fts_delete;
+		DROP TABLE IF EXISTS skills_fts;
+		CREATE VIRTUAL TABLE skills_fts USING fts5(
+			name,
+			display_name,
+			triggers,
+			content,
+			content='skills',
+			content_rowid='id'
+		);
+		INSERT INTO skills_fts(rowid, name, display_name, triggers, content)
+		SELECT id, name, display_name, triggers, content
+		FROM skills
+		WHERE is_active = 1;
+		CREATE TRIGGER skills_fts_insert AFTER INSERT ON skills BEGIN
+			INSERT INTO skills_fts(rowid, name, display_name, triggers, content)
+			VALUES (new.id, new.name, new.display_name, new.triggers, new.content);
+		END;
+		CREATE TRIGGER skills_fts_delete AFTER DELETE ON skills BEGIN
+			INSERT INTO skills_fts(skills_fts, rowid, name, display_name, triggers, content)
+			VALUES ('delete', old.id, old.name, old.display_name, old.triggers, old.content);
+		END;
+		CREATE TRIGGER skills_fts_update AFTER UPDATE ON skills BEGIN
+			INSERT INTO skills_fts(skills_fts, rowid, name, display_name, triggers, content)
+			VALUES ('delete', old.id, old.name, old.display_name, old.triggers, old.content);
+			INSERT INTO skills_fts(rowid, name, display_name, triggers, content)
+			VALUES (new.id, new.name, new.display_name, new.triggers, new.content);
+		END;
+	`); err != nil {
+		return fmt.Errorf("migrate catalog tables: rebuild fts: %w", err)
+	}
+
+	if err := s.commitHook(tx); err != nil {
+		return fmt.Errorf("migrate catalog tables: commit: %w", err)
+	}
+
+	return nil
+}
+
 func (s *Store) migrateLegacyObservationsTable() error {
 	rows, err := s.queryItHook(s.db, "PRAGMA table_info(observations)")
 	if err != nil {
@@ -3703,7 +4090,191 @@ func Now() string {
 	return time.Now().UTC().Format("2006-01-02 15:04:05")
 }
 
+// ─── Catalog Store Methods (Stacks & Categories) ─────────────────────────────
+
+// ListStacks returns all stack catalog entries ordered by name ASC.
+// Returns an empty slice (not nil) when there are no entries.
+func (s *Store) ListStacks() ([]Stack, error) {
+	rows, err := s.queryItHook(s.db, `SELECT id, name, display_name FROM stacks ORDER BY name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := []Stack{}
+	for rows.Next() {
+		var st Stack
+		if err := rows.Scan(&st.ID, &st.Name, &st.DisplayName); err != nil {
+			return nil, err
+		}
+		results = append(results, st)
+	}
+	return results, rows.Err()
+}
+
+// CreateStack inserts a new stack catalog entry.
+// Returns an error if a stack with the same name already exists (UNIQUE constraint).
+func (s *Store) CreateStack(name, displayName string) (*Stack, error) {
+	res, err := s.execHook(s.db,
+		`INSERT INTO stacks (name, display_name) VALUES (?, ?)`,
+		name, displayName,
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return &Stack{ID: id, Name: name, DisplayName: displayName}, nil
+}
+
+// DeleteStack removes a stack by ID.
+// Rows in skill_stacks that reference this stack are cascade-deleted by the FK constraint.
+// Returns ErrNotFound if no stack with the given ID exists.
+func (s *Store) DeleteStack(id int64) error {
+	result, err := s.execHook(s.db, `DELETE FROM stacks WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListCategories returns all category catalog entries ordered by name ASC.
+// Returns an empty slice (not nil) when there are no entries.
+func (s *Store) ListCategories() ([]Category, error) {
+	rows, err := s.queryItHook(s.db, `SELECT id, name, display_name FROM categories ORDER BY name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := []Category{}
+	for rows.Next() {
+		var c Category
+		if err := rows.Scan(&c.ID, &c.Name, &c.DisplayName); err != nil {
+			return nil, err
+		}
+		results = append(results, c)
+	}
+	return results, rows.Err()
+}
+
+// CreateCategory inserts a new category catalog entry.
+// Returns an error if a category with the same name already exists (UNIQUE constraint).
+func (s *Store) CreateCategory(name, displayName string) (*Category, error) {
+	res, err := s.execHook(s.db,
+		`INSERT INTO categories (name, display_name) VALUES (?, ?)`,
+		name, displayName,
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return &Category{ID: id, Name: name, DisplayName: displayName}, nil
+}
+
+// DeleteCategory removes a category by ID.
+// Rows in skill_categories that reference this category are cascade-deleted by the FK constraint.
+// Returns ErrNotFound if no category with the given ID exists.
+func (s *Store) DeleteCategory(id int64) error {
+	result, err := s.execHook(s.db, `DELETE FROM categories WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ─── Skills Store Methods ─────────────────────────────────────────────────────
+
+// loadSkillRelationships loads Stacks and Categories for a skill from join tables.
+// Returns empty slices (not nil) if no relationships exist.
+func (s *Store) loadSkillRelationships(db queryer, skillID int64) ([]StackRef, []CategoryRef, error) {
+	stacks := []StackRef{}
+	categories := []CategoryRef{}
+
+	stackRows, err := s.queryItHook(db, `
+		SELECT st.id, st.name, st.display_name
+		FROM skill_stacks ss
+		JOIN stacks st ON st.id = ss.stack_id
+		WHERE ss.skill_id = ?
+		ORDER BY st.name ASC`, skillID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer stackRows.Close()
+	for stackRows.Next() {
+		var sr StackRef
+		if err := stackRows.Scan(&sr.ID, &sr.Name, &sr.DisplayName); err != nil {
+			return nil, nil, err
+		}
+		stacks = append(stacks, sr)
+	}
+	if err := stackRows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	catRows, err := s.queryItHook(db, `
+		SELECT c.id, c.name, c.display_name
+		FROM skill_categories sc
+		JOIN categories c ON c.id = sc.category_id
+		WHERE sc.skill_id = ?
+		ORDER BY c.name ASC`, skillID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer catRows.Close()
+	for catRows.Next() {
+		var cr CategoryRef
+		if err := catRows.Scan(&cr.ID, &cr.Name, &cr.DisplayName); err != nil {
+			return nil, nil, err
+		}
+		categories = append(categories, cr)
+	}
+	if err := catRows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	return stacks, categories, nil
+}
+
+// insertSkillRelationshipsTx inserts skill_stacks and skill_categories rows within a transaction.
+func (s *Store) insertSkillRelationshipsTx(tx *sql.Tx, skillID int64, stackIDs, categoryIDs []int64) error {
+	for _, sid := range stackIDs {
+		if _, err := s.execHook(tx,
+			`INSERT INTO skill_stacks (skill_id, stack_id) VALUES (?, ?)`,
+			skillID, sid,
+		); err != nil {
+			return err
+		}
+	}
+	for _, cid := range categoryIDs {
+		if _, err := s.execHook(tx,
+			`INSERT INTO skill_categories (skill_id, category_id) VALUES (?, ?)`,
+			skillID, cid,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // CreateSkill inserts a new skill row and an initial skill_versions row (v1).
 // Returns an error if a skill with the same name already exists.
@@ -3716,9 +4287,9 @@ func (s *Store) CreateSkill(params CreateSkillParams) (*Skill, error) {
 	var skill *Skill
 	err := s.withTx(func(tx *sql.Tx) error {
 		res, err := s.execHook(tx, `
-			INSERT INTO skills (name, display_name, category, stack, triggers, content, version, is_active, changed_by)
-			VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)`,
-			params.Name, params.DisplayName, params.Category, params.Stack, params.Triggers, params.Content, changedBy,
+			INSERT INTO skills (name, display_name, triggers, content, compact_rules, version, is_active, changed_by)
+			VALUES (?, ?, ?, ?, ?, 1, 1, ?)`,
+			params.Name, params.DisplayName, params.Triggers, params.Content, params.CompactRules, changedBy,
 		)
 		if err != nil {
 			return err
@@ -3728,18 +4299,23 @@ func (s *Store) CreateSkill(params CreateSkillParams) (*Skill, error) {
 			return err
 		}
 
+		// Insert join rows
+		if err := s.insertSkillRelationshipsTx(tx, skillID, params.StackIDs, params.CategoryIDs); err != nil {
+			return err
+		}
+
 		// Insert initial version row
 		if _, err := s.execHook(tx, `
-			INSERT INTO skill_versions (skill_id, version, content, changed_by)
-			VALUES (?, 1, ?, ?)`,
-			skillID, params.Content, changedBy,
+			INSERT INTO skill_versions (skill_id, version, content, compact_rules, changed_by)
+			VALUES (?, 1, ?, ?, ?)`,
+			skillID, params.Content, params.CompactRules, changedBy,
 		); err != nil {
 			return err
 		}
 
 		// Read back the full row
 		rows, err := s.queryHook(tx, `
-			SELECT id, name, display_name, category, stack, triggers, content, version, is_active, changed_by, created_at, updated_at
+			SELECT id, name, display_name, triggers, content, compact_rules, version, is_active, changed_by, created_at, updated_at
 			FROM skills WHERE id = ?`, skillID)
 		if err != nil {
 			return err
@@ -3748,10 +4324,16 @@ func (s *Store) CreateSkill(params CreateSkillParams) (*Skill, error) {
 		if rows.Next() {
 			var sk Skill
 			var isActive int
-			if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Category, &sk.Stack, &sk.Triggers, &sk.Content, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+			if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.CompactRules, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 				return err
 			}
 			sk.IsActive = isActive == 1
+			stacks, categories, err := s.loadSkillRelationships(tx, sk.ID)
+			if err != nil {
+				return err
+			}
+			sk.Stacks = stacks
+			sk.Categories = categories
 			skill = &sk
 		}
 		return rows.Err()
@@ -3787,14 +4369,6 @@ func (s *Store) UpdateSkill(name string, params UpdateSkillParams) (*Skill, erro
 			setClauses = append(setClauses, "display_name = ?")
 			args = append(args, *params.DisplayName)
 		}
-		if params.Category != nil {
-			setClauses = append(setClauses, "category = ?")
-			args = append(args, *params.Category)
-		}
-		if params.Stack != nil {
-			setClauses = append(setClauses, "stack = ?")
-			args = append(args, *params.Stack)
-		}
 		if params.Triggers != nil {
 			setClauses = append(setClauses, "triggers = ?")
 			args = append(args, *params.Triggers)
@@ -3803,6 +4377,10 @@ func (s *Store) UpdateSkill(name string, params UpdateSkillParams) (*Skill, erro
 			setClauses = append(setClauses, "content = ?")
 			args = append(args, *params.Content)
 		}
+		if params.CompactRules != nil {
+			setClauses = append(setClauses, "compact_rules = ?")
+			args = append(args, *params.CompactRules)
+		}
 		args = append(args, skillID)
 
 		updateSQL := "UPDATE skills SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
@@ -3810,24 +4388,46 @@ func (s *Store) UpdateSkill(name string, params UpdateSkillParams) (*Skill, erro
 			return err
 		}
 
-		// Read back the content for version row
-		var content string
-		if err := tx.QueryRow(`SELECT content FROM skills WHERE id = ?`, skillID).Scan(&content); err != nil {
+		// Update join rows if StackIDs or CategoryIDs are provided
+		if params.StackIDs != nil {
+			if _, err := s.execHook(tx, `DELETE FROM skill_stacks WHERE skill_id = ?`, skillID); err != nil {
+				return err
+			}
+			for _, sid := range *params.StackIDs {
+				if _, err := s.execHook(tx, `INSERT INTO skill_stacks (skill_id, stack_id) VALUES (?, ?)`, skillID, sid); err != nil {
+					return err
+				}
+			}
+		}
+		if params.CategoryIDs != nil {
+			if _, err := s.execHook(tx, `DELETE FROM skill_categories WHERE skill_id = ?`, skillID); err != nil {
+				return err
+			}
+			for _, cid := range *params.CategoryIDs {
+				if _, err := s.execHook(tx, `INSERT INTO skill_categories (skill_id, category_id) VALUES (?, ?)`, skillID, cid); err != nil {
+					return err
+				}
+			}
+		}
+
+		// Read back the content and compact_rules for version row
+		var content, compactRules string
+		if err := tx.QueryRow(`SELECT content, compact_rules FROM skills WHERE id = ?`, skillID).Scan(&content, &compactRules); err != nil {
 			return err
 		}
 
 		// Insert new version row
 		if _, err := s.execHook(tx, `
-			INSERT INTO skill_versions (skill_id, version, content, changed_by)
-			VALUES (?, ?, ?, ?)`,
-			skillID, newVersion, content, changedBy,
+			INSERT INTO skill_versions (skill_id, version, content, compact_rules, changed_by)
+			VALUES (?, ?, ?, ?, ?)`,
+			skillID, newVersion, content, compactRules, changedBy,
 		); err != nil {
 			return err
 		}
 
 		// Read back full row
 		rows, err := s.queryHook(tx, `
-			SELECT id, name, display_name, category, stack, triggers, content, version, is_active, changed_by, created_at, updated_at
+			SELECT id, name, display_name, triggers, content, compact_rules, version, is_active, changed_by, created_at, updated_at
 			FROM skills WHERE id = ?`, skillID)
 		if err != nil {
 			return err
@@ -3836,10 +4436,16 @@ func (s *Store) UpdateSkill(name string, params UpdateSkillParams) (*Skill, erro
 		if rows.Next() {
 			var sk Skill
 			var isActive int
-			if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Category, &sk.Stack, &sk.Triggers, &sk.Content, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+			if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.CompactRules, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 				return err
 			}
 			sk.IsActive = isActive == 1
+			stacks, categories, err := s.loadSkillRelationships(tx, sk.ID)
+			if err != nil {
+				return err
+			}
+			sk.Stacks = stacks
+			sk.Categories = categories
 			skill = &sk
 		}
 		return rows.Err()
@@ -3851,7 +4457,7 @@ func (s *Store) UpdateSkill(name string, params UpdateSkillParams) (*Skill, erro
 // Returns nil, sql.ErrNoRows if not found.
 func (s *Store) GetSkill(name string) (*Skill, error) {
 	rows, err := s.queryHook(s.db, `
-		SELECT id, name, display_name, category, stack, triggers, content, version, is_active, changed_by, created_at, updated_at
+		SELECT id, name, display_name, triggers, content, compact_rules, version, is_active, changed_by, created_at, updated_at
 		FROM skills WHERE name = ?`, name)
 	if err != nil {
 		return nil, err
@@ -3861,10 +4467,16 @@ func (s *Store) GetSkill(name string) (*Skill, error) {
 	if rows.Next() {
 		var sk Skill
 		var isActive int
-		if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Category, &sk.Stack, &sk.Triggers, &sk.Content, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.CompactRules, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 			return nil, err
 		}
 		sk.IsActive = isActive == 1
+		stacks, categories, err := s.loadSkillRelationships(s.db, sk.ID)
+		if err != nil {
+			return nil, err
+		}
+		sk.Stacks = stacks
+		sk.Categories = categories
 		return &sk, rows.Err()
 	}
 	if err := rows.Err(); err != nil {
@@ -3883,38 +4495,38 @@ func (s *Store) ListSkills(params ListSkillsParams) ([]Skill, error) {
 		// FTS5 path
 		ftsQuery := sanitizeFTS(params.Query)
 		sqlQ = `
-			SELECT sk.id, sk.name, sk.display_name, sk.category, sk.stack, sk.triggers, '' as content,
+			SELECT sk.id, sk.name, sk.display_name, sk.triggers, '' as content, '' as compact_rules,
 			       sk.version, sk.is_active, sk.changed_by, sk.created_at, sk.updated_at
 			FROM skills_fts fts
 			JOIN skills sk ON sk.id = fts.rowid
 			WHERE skills_fts MATCH ? AND sk.is_active = 1`
 		args = []any{ftsQuery}
 
-		if params.Stack != "" {
-			sqlQ += " AND sk.stack = ?"
-			args = append(args, params.Stack)
+		if params.StackID != nil {
+			sqlQ += " AND sk.id IN (SELECT skill_id FROM skill_stacks WHERE stack_id = ?)"
+			args = append(args, *params.StackID)
 		}
-		if params.Category != "" {
-			sqlQ += " AND sk.category = ?"
-			args = append(args, params.Category)
+		if params.CategoryID != nil {
+			sqlQ += " AND sk.id IN (SELECT skill_id FROM skill_categories WHERE category_id = ?)"
+			args = append(args, *params.CategoryID)
 		}
 		sqlQ += " ORDER BY fts.rank"
 	} else {
-		// Plain SELECT path (metadata only)
+		// Plain SELECT path (metadata only — compact_rules intentionally omitted)
 		sqlQ = `
-			SELECT id, name, display_name, category, stack, triggers, '' as content,
-			       version, is_active, changed_by, created_at, updated_at
-			FROM skills WHERE is_active = 1`
+			SELECT sk.id, sk.name, sk.display_name, sk.triggers, '' as content, '' as compact_rules,
+			       sk.version, sk.is_active, sk.changed_by, sk.created_at, sk.updated_at
+			FROM skills sk WHERE sk.is_active = 1`
 
-		if params.Stack != "" {
-			sqlQ += " AND stack = ?"
-			args = append(args, params.Stack)
+		if params.StackID != nil {
+			sqlQ += " AND sk.id IN (SELECT skill_id FROM skill_stacks WHERE stack_id = ?)"
+			args = append(args, *params.StackID)
 		}
-		if params.Category != "" {
-			sqlQ += " AND category = ?"
-			args = append(args, params.Category)
+		if params.CategoryID != nil {
+			sqlQ += " AND sk.id IN (SELECT skill_id FROM skill_categories WHERE category_id = ?)"
+			args = append(args, *params.CategoryID)
 		}
-		sqlQ += " ORDER BY name ASC"
+		sqlQ += " ORDER BY sk.name ASC"
 	}
 
 	rows, err := s.queryItHook(s.db, sqlQ, args...)
@@ -3927,11 +4539,20 @@ func (s *Store) ListSkills(params ListSkillsParams) ([]Skill, error) {
 	for rows.Next() {
 		var sk Skill
 		var isActive int
-		if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Category, &sk.Stack, &sk.Triggers, &sk.Content, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.CompactRules, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 			return nil, err
 		}
 		sk.IsActive = isActive == 1
+		stacks, categories, err := s.loadSkillRelationships(s.db, sk.ID)
+		if err != nil {
+			return nil, err
+		}
+		sk.Stacks = stacks
+		sk.Categories = categories
 		results = append(results, sk)
+	}
+	if results == nil {
+		results = []Skill{}
 	}
 	return results, rows.Err()
 }
@@ -3940,7 +4561,7 @@ func (s *Store) ListSkills(params ListSkillsParams) ([]Skill, error) {
 // Returns an empty slice (not an error) if the skill does not exist.
 func (s *Store) GetSkillVersions(name string) ([]SkillVersion, error) {
 	sqlQ := `
-		SELECT sv.id, sv.skill_id, sv.version, sv.content, sv.changed_by, sv.created_at
+		SELECT sv.id, sv.skill_id, sv.version, sv.content, sv.compact_rules, sv.changed_by, sv.created_at
 		FROM skill_versions sv
 		JOIN skills sk ON sk.id = sv.skill_id
 		WHERE sk.name = ?
@@ -3955,7 +4576,7 @@ func (s *Store) GetSkillVersions(name string) ([]SkillVersion, error) {
 	var results []SkillVersion
 	for rows.Next() {
 		var sv SkillVersion
-		if err := rows.Scan(&sv.ID, &sv.SkillID, &sv.Version, &sv.Content, &sv.ChangedBy, &sv.CreatedAt); err != nil {
+		if err := rows.Scan(&sv.ID, &sv.SkillID, &sv.Version, &sv.Content, &sv.CompactRules, &sv.ChangedBy, &sv.CreatedAt); err != nil {
 			return nil, err
 		}
 		results = append(results, sv)

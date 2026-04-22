@@ -1,0 +1,16 @@
+.git
+.github
+
+*.db
+*.db-wal
+*.db-shm
+
+coverage.out
+*.test
+
+dist/
+tmp/
+lore.pen
+
+!internal/admin/admin_dist/
+!internal/admin/admin_dist/**

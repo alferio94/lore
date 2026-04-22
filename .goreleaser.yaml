@@ -4,6 +4,7 @@ project_name: lore
 
 before:
   hooks:
+    - make build-frontend
     - go mod tidy
 
 builds:

@@ -15,8 +15,6 @@ func seedSkillForAdmin(t *testing.T, s *Store, name string) *Skill {
 	sk, err := s.CreateSkill(CreateSkillParams{
 		Name:        name,
 		DisplayName: name,
-		Category:    "test",
-		Stack:       "go",
 		Triggers:    "trigger",
 		Content:     "content for " + name,
 		ChangedBy:   "test",

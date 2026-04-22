@@ -1493,6 +1493,111 @@ func TestExplicitSessionIDBypassesDefault(t *testing.T) {
 	}
 }
 
+// ─── compact-rules Phase 4: MCP Protocol ─────────────────────────────────────
+
+// Task 4.1 RED: lore_get_skill response includes compact_rules;
+// lore_list_skills items do NOT include compact_rules.
+
+func TestHandleGetSkillIncludesCompactRules(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	// Create a skill with compact_rules
+	_, err := s.CreateSkill(store.CreateSkillParams{
+		Name:         "cr-mcp-skill",
+		Content:      "full content here",
+		CompactRules: "Use Given/When/Then.",
+		ChangedBy:    "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	h := handleGetSkill(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"name": "cr-mcp-skill",
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	if !strings.Contains(text, `"compact_rules"`) {
+		t.Errorf("lore_get_skill response should contain compact_rules key, got: %s", text)
+	}
+	if !strings.Contains(text, "Use Given/When/Then.") {
+		t.Errorf("lore_get_skill response should contain compact_rules value, got: %s", text)
+	}
+}
+
+func TestHandleGetSkillIncludesEmptyCompactRules(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	_, err := s.CreateSkill(store.CreateSkillParams{
+		Name:      "no-cr-mcp-skill",
+		Content:   "content",
+		ChangedBy: "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	h := handleGetSkill(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"name": "no-cr-mcp-skill",
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	// compact_rules key should be present (marshalled as empty string)
+	if !strings.Contains(text, `"compact_rules"`) {
+		t.Errorf("lore_get_skill should include compact_rules key even when empty, got: %s", text)
+	}
+}
+
+// Task 4.2 — confirm lore_list_skills intentionally omits compact_rules.
+func TestHandleListSkillsOmitsCompactRules(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	_, err := s.CreateSkill(store.CreateSkillParams{
+		Name:         "list-cr-skill",
+		Content:      "content",
+		CompactRules: "should not appear in list",
+		ChangedBy:    "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	h := handleListSkills(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	// skillMeta intentionally omits compact_rules
+	if strings.Contains(text, `"compact_rules"`) {
+		t.Errorf("lore_list_skills response should NOT contain compact_rules key, got: %s", text)
+	}
+}
+
 func TestDestructiveToolAnnotation(t *testing.T) {
 	s := newMCPTestStore(t)
 	srv := NewServer(s)
@@ -1835,19 +1940,39 @@ func TestHandleSaveDefaultProjectDoesNotOverrideExplicit(t *testing.T) {
 // ─── Phase 4: Skills MCP Tools ───────────────────────────────────────────────
 
 // seedSkill is a test helper that creates a skill in the store.
+// stack and category parameters are retained for signature compatibility with
+// existing call sites but are not yet used — catalog IDs are set in Phase 3/4.
 func seedSkill(t *testing.T, s *store.Store, name, displayName, stack, category, triggers, content string) {
 	t.Helper()
 	_, err := s.CreateSkill(store.CreateSkillParams{
 		Name:        name,
 		DisplayName: displayName,
-		Stack:       stack,
-		Category:    category,
 		Triggers:    triggers,
 		Content:     content,
 		ChangedBy:   "test",
 	})
 	if err != nil {
 		t.Fatalf("seedSkill(%q): %v", name, err)
+	}
+	// stack and category are intentionally unused — catalog relationships are Phase 3/4
+	_ = stack
+	_ = category
+}
+
+// seedSkillWithCatalog creates a skill with actual stack/category catalog relationships.
+func seedSkillWithCatalog(t *testing.T, s *store.Store, name, displayName string, stackIDs, categoryIDs []int64, triggers, content string) {
+	t.Helper()
+	_, err := s.CreateSkill(store.CreateSkillParams{
+		Name:        name,
+		DisplayName: displayName,
+		StackIDs:    stackIDs,
+		CategoryIDs: categoryIDs,
+		Triggers:    triggers,
+		Content:     content,
+		ChangedBy:   "test",
+	})
+	if err != nil {
+		t.Fatalf("seedSkillWithCatalog(%q): %v", name, err)
 	}
 }
 
@@ -1882,15 +2007,55 @@ func TestHandleListSkillsNoParams(t *testing.T) {
 	}
 }
 
+// TestHandleListSkillsWithStackIDFilter verifies that lore_list_skills filters by stack_id
+// (integer parameter). Phase 4: string stack/category params replaced by stack_id/category_id.
+func TestHandleListSkillsWithStackIDFilter(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	// Create catalog entries
+	angular, err := s.CreateStack("angular", "Angular")
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+	_, err = s.CreateStack("java", "Java")
+	if err != nil {
+		t.Fatalf("CreateStack java: %v", err)
+	}
+
+	// Seed skills with stack relationships
+	seedSkillWithCatalog(t, s, "lore-ng-guard", "Angular Guard", []int64{angular.ID}, nil, "Angular trigger", "Angular content")
+	seedSkill(t, s, "lore-java-service", "Java Service", "", "", "Java trigger", "Java content")
+
+	h := handleListSkills(s)
+	// Filter by angular stack_id — should return only Angular skill
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"stack_id": float64(angular.ID),
+	}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	if !strings.Contains(text, "lore-ng-guard") {
+		t.Errorf("expected lore-ng-guard in filtered output, got %q", text)
+	}
+	if strings.Contains(text, "lore-java-service") {
+		t.Errorf("lore-java-service should NOT appear when filtering by angular stack_id, got %q", text)
+	}
+}
+
+// TestHandleListSkillsWithStackFilter verifies that lore_list_skills with no filter returns all skills.
 func TestHandleListSkillsWithStackFilter(t *testing.T) {
 	s := newMCPTestStore(t)
 	seedSkill(t, s, "lore-ng-guard", "Angular Guard", "angular", "conventions", "Angular trigger", "Angular content")
 	seedSkill(t, s, "lore-java-service", "Java Service", "java", "patterns", "Java trigger", "Java content")
 
 	h := handleListSkills(s)
-	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
-		"stack": "angular",
-	}}}
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{}}}
 	res, err := h(context.Background(), req)
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
@@ -1903,8 +2068,8 @@ func TestHandleListSkillsWithStackFilter(t *testing.T) {
 	if !strings.Contains(text, "lore-ng-guard") {
 		t.Errorf("expected lore-ng-guard in output, got %q", text)
 	}
-	if strings.Contains(text, "lore-java-service") {
-		t.Errorf("lore-java-service should NOT appear when filtering by stack=angular, got %q", text)
+	if !strings.Contains(text, "lore-java-service") {
+		t.Errorf("expected lore-java-service in output, got %q", text)
 	}
 }
 
@@ -1925,6 +2090,108 @@ func TestHandleListSkillsEmptyDB(t *testing.T) {
 	// Should return empty array — not an error
 	if !strings.Contains(text, "[]") {
 		t.Errorf("expected empty JSON array [], got %q", text)
+	}
+}
+
+// TestHandleListSkillsWithCategoryIDFilter verifies filtering by category_id.
+func TestHandleListSkillsWithCategoryIDFilter(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	conventions, err := s.CreateCategory("conventions", "Conventions")
+	if err != nil {
+		t.Fatalf("CreateCategory: %v", err)
+	}
+
+	seedSkillWithCatalog(t, s, "lore-conv-skill", "Conventions Skill", nil, []int64{conventions.ID}, "Conventions trigger", "Conventions content")
+	seedSkill(t, s, "lore-other-skill", "Other Skill", "", "", "Other trigger", "Other content")
+
+	h := handleListSkills(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"category_id": float64(conventions.ID),
+	}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	if !strings.Contains(text, "lore-conv-skill") {
+		t.Errorf("expected lore-conv-skill in filtered output, got %q", text)
+	}
+	if strings.Contains(text, "lore-other-skill") {
+		t.Errorf("lore-other-skill should NOT appear when filtering by category_id, got %q", text)
+	}
+}
+
+// TestHandleListSkillsStackIDFilterNoMatch verifies empty array returned when no skills match.
+func TestHandleListSkillsStackIDFilterNoMatch(t *testing.T) {
+	s := newMCPTestStore(t)
+	seedSkill(t, s, "lore-some-skill", "Some Skill", "", "", "Some trigger", "Some content")
+
+	h := handleListSkills(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"stack_id": float64(999),
+	}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	if !strings.Contains(text, "[]") {
+		t.Errorf("expected empty array [] when no skills match stack_id, got %q", text)
+	}
+}
+
+// TestHandleListSkillsResponseHasStacksArray verifies that list response uses stacks/categories arrays.
+func TestHandleListSkillsResponseHasStacksArray(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	angular, err := s.CreateStack("angular", "Angular")
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+	conventions, err := s.CreateCategory("conventions", "Conventions")
+	if err != nil {
+		t.Fatalf("CreateCategory: %v", err)
+	}
+
+	seedSkillWithCatalog(t, s, "lore-array-skill", "Array Skill", []int64{angular.ID}, []int64{conventions.ID}, "Array trigger", "Array content")
+
+	h := handleListSkills(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	// Must have stacks/categories as array fields (JSON key names)
+	if !strings.Contains(text, `"stacks"`) {
+		t.Errorf("expected stacks array field in list response, got %q", text)
+	}
+	if !strings.Contains(text, `"categories"`) {
+		t.Errorf("expected categories array field in list response, got %q", text)
+	}
+	// Old string fields must NOT appear at the top-level list item
+	if strings.Contains(text, `"stack":`) {
+		t.Errorf("old 'stack' string field should NOT appear in list response, got %q", text)
+	}
+	if strings.Contains(text, `"category":`) {
+		t.Errorf("old 'category' string field should NOT appear in list response, got %q", text)
+	}
+	// Should contain the actual stack name
+	if !strings.Contains(text, "angular") {
+		t.Errorf("expected angular stack name in stacks array, got %q", text)
 	}
 }
 
@@ -1983,6 +2250,84 @@ func TestHandleGetSkillMissingNameParam(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatalf("expected validation error when name is missing, got %q", callResultText(t, res))
+	}
+}
+
+// TestHandleGetSkillResponseHasStacksArray verifies arrays instead of strings in get response.
+func TestHandleGetSkillResponseHasStacksArray(t *testing.T) {
+	s := newMCPTestStore(t)
+
+	angular, err := s.CreateStack("angular", "Angular")
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+	conventions, err := s.CreateCategory("conventions", "Conventions")
+	if err != nil {
+		t.Fatalf("CreateCategory: %v", err)
+	}
+
+	seedSkillWithCatalog(t, s, "lore-arrays-skill", "Arrays Skill", []int64{angular.ID}, []int64{conventions.ID}, "Arrays trigger", "# Arrays content")
+
+	h := handleGetSkill(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"name": "lore-arrays-skill",
+	}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	// stacks and categories must be arrays
+	if !strings.Contains(text, `"stacks"`) {
+		t.Errorf("expected stacks array in get response, got %q", text)
+	}
+	if !strings.Contains(text, `"categories"`) {
+		t.Errorf("expected categories array in get response, got %q", text)
+	}
+	// Old string fields must NOT appear
+	if strings.Contains(text, `"stack":`) {
+		t.Errorf("old 'stack' string field should NOT appear in get response, got %q", text)
+	}
+	if strings.Contains(text, `"category":`) {
+		t.Errorf("old 'category' string field should NOT appear in get response, got %q", text)
+	}
+	// Stack object must have id, name, display_name
+	if !strings.Contains(text, `"display_name"`) {
+		t.Errorf("expected display_name in stack object, got %q", text)
+	}
+	if !strings.Contains(text, "angular") {
+		t.Errorf("expected angular in stacks, got %q", text)
+	}
+}
+
+// TestHandleGetSkillEmptyArraysWhenNoRelationships verifies empty arrays (not nil) returned.
+func TestHandleGetSkillEmptyArraysWhenNoRelationships(t *testing.T) {
+	s := newMCPTestStore(t)
+	seedSkill(t, s, "lore-bare-skill", "Bare Skill", "", "", "Bare trigger", "# Bare content")
+
+	h := handleGetSkill(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"name": "lore-bare-skill",
+	}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	// stacks and categories must be present as empty arrays [], not null or absent
+	if !strings.Contains(text, `"stacks":[]`) {
+		t.Errorf("expected stacks:[] for skill with no stacks, got %q", text)
+	}
+	if !strings.Contains(text, `"categories":[]`) {
+		t.Errorf("expected categories:[] for skill with no categories, got %q", text)
 	}
 }
 
