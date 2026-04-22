@@ -29,6 +29,7 @@ type AdminConfig struct {
 	GitHubClientID     string         // from LORE_GITHUB_CLIENT_ID
 	GitHubClientSecret string         // from LORE_GITHUB_CLIENT_SECRET
 	DevAuth            bool           // --dev-auth flag
+	CookieSecure       bool           // session/oauth cookie Secure attribute
 	BaseURL            string         // e.g. "http://localhost:7437"
 	GoogleOAuth        *oauth2.Config // nil if creds not configured
 	GithubOAuth        *oauth2.Config // nil if creds not configured

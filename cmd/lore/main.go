@@ -59,7 +59,7 @@ func init() {
 
 var (
 	storeNew      = store.New
-	newHTTPServer = server.New
+	newHTTPServer = server.NewWithConfig
 	startHTTP     = (*server.Server).Start
 
 	newMCPServer           = mcp.NewServer
@@ -192,19 +192,18 @@ func main() {
 // ─── Commands ────────────────────────────────────────────────────────────────
 
 func cmdServe(cfg store.Config) {
-	port := 7437 // "ENGR" on phone keypad vibes
-	if p := os.Getenv("LORE_PORT"); p != "" {
-		if n, err := strconv.Atoi(p); err == nil {
-			port = n
-		}
+	runtimeCfg, err := loadRuntimeConfig(cfg, os.Args[2:])
+	if err != nil {
+		fatal(err)
 	}
-	// Allow: lore serve 8080  and  lore serve --dev-auth
+
+	cfg.DataDir = runtimeCfg.DataDir
+
+	// Allow: lore serve --dev-auth
 	devAuth := false
 	for i := 2; i < len(os.Args); i++ {
 		if os.Args[i] == "--dev-auth" {
 			devAuth = true
-		} else if n, err := strconv.Atoi(os.Args[i]); err == nil {
-			port = n
 		}
 	}
 
@@ -214,7 +213,7 @@ func cmdServe(cfg store.Config) {
 	}
 	defer s.Close()
 
-	srv := newHTTPServer(s, port)
+	srv := newHTTPServer(s, server.Config{Host: runtimeCfg.Host, Port: runtimeCfg.Port, Version: version})
 
 	// Project detection chain: LORE_PROJECT env → git detection.
 	// (matches the same chain used by cmdMCP for consistency)
@@ -229,28 +228,31 @@ func cmdServe(cfg store.Config) {
 	// Mount MCP HTTP handler at /mcp.
 	mcpHandler := newMCPHTTPHandler(s, projectHint)
 	srv.SetMCPHandler(mcpHandler)
-	log.Printf("[lore] MCP HTTP endpoint: http://127.0.0.1:%d/mcp", port)
+	log.Printf("[lore] MCP HTTP endpoint: %s/mcp", runtimeCfg.BaseURL)
 
 	// ── Admin web panel ──────────────────────────────────────────────────────
 	// Build AdminConfig from environment variables.
-	jwtSecret := []byte(os.Getenv("LORE_JWT_SECRET"))
+	jwtSecret := []byte(runtimeCfg.JWTSecret)
 	if len(jwtSecret) == 0 {
-		// Auto-generate a random 32-byte secret for this process lifetime.
-		// Sessions will be invalidated on restart.  Set LORE_JWT_SECRET to
-		// persist sessions across restarts.
-		jwtSecret = adminGenerateSecret()
-		log.Printf("[lore] WARN: LORE_JWT_SECRET is not set — generated a random JWT secret; admin sessions will not survive restarts")
+		if runtimeCfg.Env == RuntimeEnvLocal {
+			// Auto-generate a random 32-byte secret for this process lifetime.
+			// Sessions will be invalidated on restart. Set LORE_JWT_SECRET to
+			// persist sessions across restarts.
+			jwtSecret = adminGenerateSecret()
+			log.Printf("[lore] WARN: LORE_JWT_SECRET is not set — generated a random JWT secret; admin sessions will not survive restarts")
+		}
 	}
 
 	adminCfg := admin.AdminConfig{
 		Store:              s,
 		JWTSecret:          jwtSecret,
 		DevAuth:            devAuth,
-		BaseURL:            fmt.Sprintf("http://127.0.0.1:%d", port),
-		GoogleClientID:     os.Getenv("LORE_GOOGLE_CLIENT_ID"),
-		GoogleClientSecret: os.Getenv("LORE_GOOGLE_CLIENT_SECRET"),
-		GitHubClientID:     os.Getenv("LORE_GITHUB_CLIENT_ID"),
-		GitHubClientSecret: os.Getenv("LORE_GITHUB_CLIENT_SECRET"),
+		CookieSecure:       runtimeCfg.CookieSecure,
+		BaseURL:            runtimeCfg.BaseURL,
+		GoogleClientID:     runtimeCfg.GoogleClientID,
+		GoogleClientSecret: runtimeCfg.GoogleClientSecret,
+		GitHubClientID:     runtimeCfg.GitHubClientID,
+		GitHubClientSecret: runtimeCfg.GitHubClientSecret,
 	}
 
 	// Warn when OAuth providers have incomplete configuration.
@@ -267,7 +269,7 @@ func cmdServe(cfg store.Config) {
 	// Mount admin routes on the server's mux.
 	mux := srv.Handler().(*http.ServeMux)
 	admin.Mount(mux, adminCfg)
-	log.Printf("[lore] admin panel: http://127.0.0.1:%d/admin/", port)
+	log.Printf("[lore] admin panel: %s/admin/", runtimeCfg.BaseURL)
 	if devAuth {
 		log.Printf("[lore] WARN: --dev-auth is enabled — do NOT use in production")
 	}

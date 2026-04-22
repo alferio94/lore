@@ -6,6 +6,7 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -525,6 +526,15 @@ func New(cfg Config) (*Store, error) {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// Ping verifies that the store database is reachable.
+func (s *Store) Ping(ctx context.Context) error {
+	var n int
+	if err := s.db.QueryRowContext(ctx, "SELECT 1").Scan(&n); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ─── Migrations ──────────────────────────────────────────────────────────────

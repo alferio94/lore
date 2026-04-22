@@ -60,6 +60,52 @@ func decodeJSON[T any](t *testing.T, resp *http.Response) T {
 	return out
 }
 
+func TestHealthContractE2E(t *testing.T) {
+	_, ts := newE2EServer(t)
+	client := ts.Client()
+
+	healthResp, err := client.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	if healthResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 health, got %d", healthResp.StatusCode)
+	}
+	body := decodeJSON[map[string]any](t, healthResp)
+	if body["status"] != "ok" {
+		t.Fatalf("expected status=ok, got %v", body["status"])
+	}
+	if body["service"] != "lore" {
+		t.Fatalf("expected service=lore, got %v", body["service"])
+	}
+	version, ok := body["version"].(string)
+	if !ok || strings.TrimSpace(version) == "" {
+		t.Fatalf("expected non-empty string version, got %#v", body["version"])
+	}
+}
+
+func TestHealthStoreUnavailableE2E(t *testing.T) {
+	s, ts := newE2EServer(t)
+	client := ts.Client()
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	healthResp, err := client.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	if healthResp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 health, got %d", healthResp.StatusCode)
+	}
+	body := decodeJSON[map[string]any](t, healthResp)
+	want := map[string]any{"status": "error", "reason": "store unavailable"}
+	if body["status"] != want["status"] || body["reason"] != want["reason"] {
+		t.Fatalf("unexpected health payload: got=%v want=%v", body, want)
+	}
+}
+
 func TestObservationsTopicUpsertAndDeleteE2E(t *testing.T) {
 	_, ts := newE2EServer(t)
 	client := ts.Client()

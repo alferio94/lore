@@ -187,6 +187,44 @@ func TestHandleDevAuth(t *testing.T) {
 	})
 }
 
+func TestHandleDevAuthCookieSecureFollowsConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		secureFlag bool
+	}{
+		{name: "secure true", secureFlag: true},
+		{name: "secure false", secureFlag: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := AdminConfig{
+				JWTSecret:    []byte("dev-auth-secret-32-bytes-long-ok!"),
+				DevAuth:      true,
+				CookieSecure: tc.secureFlag,
+			}
+			h := &adminHandler{cfg: cfg}
+
+			req := newTestRequest(t, "GET", "/admin/auth/dev", nil)
+			w := newTestResponseRecorder()
+			h.handleDevAuth(w, req)
+
+			resp := w.Result()
+			var sessionCookie *httpCookie
+			for _, c := range resp.Cookies() {
+				if c.Name == "lore_session" {
+					sessionCookie = c
+					break
+				}
+			}
+			if sessionCookie == nil {
+				t.Fatal("expected lore_session cookie to be set")
+			}
+			if sessionCookie.Secure != tc.secureFlag {
+				t.Fatalf("Secure = %v, want %v", sessionCookie.Secure, tc.secureFlag)
+			}
+		})
+	}
+}
+
 // ─── OAuth handler tests ──────────────────────────────────────────────────────
 
 func TestHandleAuthStart(t *testing.T) {
@@ -251,6 +289,32 @@ func TestHandleAuthStart(t *testing.T) {
 		}
 		if !containsParam(location, "state") {
 			t.Errorf("redirect URL %q does not contain state param", location)
+		}
+	})
+
+	t.Run("state cookie secure follows config", func(t *testing.T) {
+		cfg := newTestOAuthConfig(t)
+		cfg.CookieSecure = true
+		h := &adminHandler{cfg: cfg}
+
+		req := newTestRequest(t, "GET", "/admin/auth/google", nil)
+		req = withPathValue(req, "provider", "google")
+		w := newTestResponseRecorder()
+		h.handleAuthStart(w, req)
+
+		resp := w.Result()
+		var stateCookie *httpCookie
+		for _, c := range resp.Cookies() {
+			if c.Name == "oauth_state" {
+				stateCookie = c
+				break
+			}
+		}
+		if stateCookie == nil {
+			t.Fatal("expected oauth_state cookie to be set")
+		}
+		if !stateCookie.Secure {
+			t.Fatal("expected oauth_state cookie Secure=true")
 		}
 	})
 }

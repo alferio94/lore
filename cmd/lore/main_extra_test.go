@@ -103,7 +103,7 @@ func stubRuntimeHooks(t *testing.T) {
 	oldCheckForUpdates := checkForUpdates
 
 	storeNew = store.New
-	newHTTPServer = func(s *store.Store, _ int) *engramsrv.Server { return engramsrv.New(s, 0) }
+	newHTTPServer = func(s *store.Store, cfg engramsrv.Config) *engramsrv.Server { return engramsrv.NewWithConfig(s, cfg) }
 	startHTTP = func(_ *engramsrv.Server) error { return nil }
 	newMCPServer = func(s *store.Store) *mcpserver.MCPServer {
 		return mcpserver.NewMCPServer("test", "0", mcpserver.WithRecovery())
@@ -222,9 +222,9 @@ func TestCmdServeParsesPortAndErrors(t *testing.T) {
 			withArgs(t, args...)
 
 			seenPort := -1
-			newHTTPServer = func(s *store.Store, port int) *engramsrv.Server {
-				seenPort = port
-				return engramsrv.New(s, 0)
+			newHTTPServer = func(s *store.Store, cfg engramsrv.Config) *engramsrv.Server {
+				seenPort = cfg.Port
+				return engramsrv.NewWithConfig(s, cfg)
 			}
 			startHTTP = func(_ *engramsrv.Server) error {
 				return tc.startErr
@@ -391,7 +391,7 @@ func TestCmdExportDefaultAndCmdImportErrors(t *testing.T) {
 func TestMainDispatchServeMCPAndTUI(t *testing.T) {
 	stubRuntimeHooks(t)
 
-	t.Setenv("ENGRAM_DATA_DIR", t.TempDir())
+	t.Setenv("LORE_DATA_DIR", t.TempDir())
 	withArgs(t, "lore", "serve", "8088")
 	_, stderr, recovered := captureOutputAndRecover(t, func() { main() })
 	if recovered != nil || stderr != "" {
@@ -502,7 +502,7 @@ func TestMainDispatchRemainingCommands(t *testing.T) {
 	withCwd(t, t.TempDir())
 
 	dataDir := t.TempDir()
-	t.Setenv("ENGRAM_DATA_DIR", dataDir)
+	t.Setenv("LORE_DATA_DIR", dataDir)
 
 	seedCfg, scErr := store.DefaultConfig()
 	if scErr != nil {
@@ -954,8 +954,8 @@ func TestCmdServeWiresMCPHandler(t *testing.T) {
 	// Capture the server returned by newHTTPServer so we can query it later.
 	oldNewHTTPServer := newHTTPServer
 	t.Cleanup(func() { newHTTPServer = oldNewHTTPServer })
-	newHTTPServer = func(s *store.Store, port int) *engramsrv.Server {
-		srv := engramsrv.New(s, port)
+	newHTTPServer = func(s *store.Store, cfg engramsrv.Config) *engramsrv.Server {
+		srv := engramsrv.NewWithConfig(s, cfg)
 		capturedSrv = srv
 		return srv
 	}

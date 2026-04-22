@@ -51,6 +51,27 @@ func TestStartUsesInjectedServe(t *testing.T) {
 	}
 }
 
+func TestStartUsesConfiguredHostAddress(t *testing.T) {
+	s := NewWithConfig(&store.Store{}, Config{Host: "0.0.0.0", Port: 7777, Version: "v-test"})
+
+	var gotAddr string
+	s.listen = func(network, address string) (net.Listener, error) {
+		gotAddr = address
+		return stubListener{}, nil
+	}
+	s.serve = func(ln net.Listener, h http.Handler) error {
+		return errors.New("serve stopped")
+	}
+
+	err := s.Start()
+	if err == nil || err.Error() != "serve stopped" {
+		t.Fatalf("expected propagated serve error, got %v", err)
+	}
+	if gotAddr != "0.0.0.0:7777" {
+		t.Fatalf("listen address = %q, want %q", gotAddr, "0.0.0.0:7777")
+	}
+}
+
 func newServerTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	cfg, err := store.DefaultConfig()
@@ -96,6 +117,61 @@ func TestStartUsesDefaultServeWhenServeNil(t *testing.T) {
 	err := s.Start()
 	if err == nil {
 		t.Fatalf("expected start to fail when default http.Serve receives failing listener")
+	}
+}
+
+func TestHandleHealthReturnsOKAndVersionWhenStoreAvailable(t *testing.T) {
+	st := newServerTestStore(t)
+	srv := NewWithConfig(st, Config{Host: "127.0.0.1", Port: 0, Version: "1.2.3"})
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode health body: %v", err)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("status = %v, want ok", body["status"])
+	}
+	if body["service"] != "lore" {
+		t.Fatalf("service = %v, want lore", body["service"])
+	}
+	if body["version"] != "1.2.3" {
+		t.Fatalf("version = %v, want 1.2.3", body["version"])
+	}
+}
+
+func TestHandleHealthReturnsUnavailableWhenStoreIsUnavailable(t *testing.T) {
+	st := newServerTestStore(t)
+	srv := NewWithConfig(st, Config{Host: "127.0.0.1", Port: 0, Version: "1.2.3"})
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rec.Code)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode health body: %v", err)
+	}
+	if body["status"] != "error" {
+		t.Fatalf("status = %v, want error", body["status"])
+	}
+	if body["reason"] != "store unavailable" {
+		t.Fatalf("reason = %v, want store unavailable", body["reason"])
 	}
 }
 

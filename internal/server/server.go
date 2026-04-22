@@ -39,15 +39,36 @@ type SyncStatus struct {
 type Server struct {
 	store      *store.Store
 	mux        *http.ServeMux
+	host       string
 	port       int
+	version    string
 	listen     func(network, address string) (net.Listener, error)
 	serve      func(net.Listener, http.Handler) error
 	onWrite    func() // called after successful local writes (for autosync notification)
 	syncStatus SyncStatusProvider
 }
 
+type Config struct {
+	Host    string
+	Port    int
+	Version string
+}
+
 func New(s *store.Store, port int) *Server {
-	srv := &Server{store: s, port: port, listen: net.Listen, serve: http.Serve}
+	return NewWithConfig(s, Config{Host: "127.0.0.1", Port: port, Version: "dev"})
+}
+
+func NewWithConfig(s *store.Store, cfg Config) *Server {
+	host := cfg.Host
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	version := cfg.Version
+	if version == "" {
+		version = "dev"
+	}
+
+	srv := &Server{store: s, host: host, port: cfg.Port, version: version, listen: net.Listen, serve: http.Serve}
 	srv.mux = http.NewServeMux()
 	srv.routes()
 	return srv
@@ -79,7 +100,7 @@ func (s *Server) notifyWrite() {
 }
 
 func (s *Server) Start() error {
-	addr := fmt.Sprintf("127.0.0.1:%d", s.port)
+	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	listenFn := s.listen
 	if listenFn == nil {
 		listenFn = net.Listen
@@ -148,10 +169,18 @@ func (s *Server) routes() {
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil || s.store.Ping(r.Context()) != nil {
+		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{
+			"status": "error",
+			"reason": "store unavailable",
+		})
+		return
+	}
+
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"status":  "ok",
 		"service": "lore",
-		"version": "0.1.0",
+		"version": s.version,
 	})
 }
 

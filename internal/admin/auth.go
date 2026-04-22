@@ -116,14 +116,14 @@ func computeHMAC(secret []byte, data string) string {
 
 // ─── Cookie helpers ───────────────────────────────────────────────────────────
 
-func setSessionCookie(w http.ResponseWriter, tokenStr string) {
+func setSessionCookie(w http.ResponseWriter, tokenStr string, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    tokenStr,
 		Path:     "/admin/",
 		MaxAge:   cookieMaxAge,
 		HttpOnly: true,
-		Secure:   false, // dev-friendly; set true in production via reverse proxy
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -147,7 +147,7 @@ func (h *adminHandler) handleDevAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setSessionCookie(w, tokenStr)
+	setSessionCookie(w, tokenStr, h.cfg.CookieSecure)
 	http.Redirect(w, r, "/admin/", http.StatusFound)
 }
 
@@ -227,7 +227,7 @@ func (h *adminHandler) handleAuthStart(w http.ResponseWriter, r *http.Request) {
 		Path:     "/admin/",
 		MaxAge:   stateCookieMaxAge,
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   h.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -314,7 +314,7 @@ func (h *adminHandler) handleAuthCallback(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	setSessionCookie(w, tokenStr)
+	setSessionCookie(w, tokenStr, h.cfg.CookieSecure)
 	http.Redirect(w, r, "/admin/", http.StatusFound)
 }
 
@@ -397,4 +397,3 @@ func defaultFetchGitHubUserInfo(accessToken string) (*oauthUserInfo, error) {
 	}
 	return &oauthUserInfo{Email: info.Email, Name: info.Name, AvatarURL: info.AvatarURL}, nil
 }
-

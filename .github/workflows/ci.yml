@@ -22,6 +22,15 @@ jobs:
         with:
           go-version: "1.25"
 
+      - name: Validate staging artifacts script
+        run: ./scripts/validate-staging.sh
+
+      - name: Prepare staging env for compose validation
+        run: cp .env.example .env.staging
+
+      - name: Validate staging compose syntax
+        run: docker compose -f docker-compose.staging.yml config --quiet
+
       - name: Run unit tests
         run: go test ./...
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,27 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+func TestStorePing(t *testing.T) {
+	t.Run("healthy db", func(t *testing.T) {
+		s := newTestStore(t)
+
+		if err := s.Ping(context.Background()); err != nil {
+			t.Fatalf("Ping() error = %v, want nil", err)
+		}
+	})
+
+	t.Run("unavailable db", func(t *testing.T) {
+		s := newTestStore(t)
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+
+		if err := s.Ping(context.Background()); err == nil {
+			t.Fatalf("Ping() error = nil, want error")
+		}
+	})
+}
 
 func mustDefaultConfig(t *testing.T) Config {
 	t.Helper()

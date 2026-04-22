@@ -12,6 +12,7 @@ import (
 
 	"github.com/alferio94/lore/internal/mcp"
 	"github.com/alferio94/lore/internal/obsidian"
+	"github.com/alferio94/lore/internal/server"
 	"github.com/alferio94/lore/internal/store"
 	versioncheck "github.com/alferio94/lore/internal/version"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -120,6 +121,210 @@ func mustSeedObservation(t *testing.T, cfg store.Config, sessionID, project, typ
 	}
 
 	return id
+}
+
+func TestLoadRuntimeConfigLocalDefaults(t *testing.T) {
+	cfg := testConfig(t)
+	t.Setenv("LORE_ENV", "")
+	t.Setenv("LORE_HOST", "")
+	t.Setenv("LORE_PORT", "")
+	t.Setenv("LORE_BASE_URL", "")
+	t.Setenv("LORE_JWT_SECRET", "")
+	t.Setenv("LORE_COOKIE_SECURE", "")
+	t.Setenv("LORE_GOOGLE_CLIENT_ID", "")
+	t.Setenv("LORE_GOOGLE_CLIENT_SECRET", "")
+	t.Setenv("LORE_GITHUB_CLIENT_ID", "")
+	t.Setenv("LORE_GITHUB_CLIENT_SECRET", "")
+
+	runtimeCfg, err := loadRuntimeConfig(cfg, []string{})
+	if err != nil {
+		t.Fatalf("loadRuntimeConfig() error = %v", err)
+	}
+
+	if runtimeCfg.Env != RuntimeEnvLocal {
+		t.Fatalf("Env = %q, want %q", runtimeCfg.Env, RuntimeEnvLocal)
+	}
+	if runtimeCfg.Host != "127.0.0.1" {
+		t.Fatalf("Host = %q, want 127.0.0.1", runtimeCfg.Host)
+	}
+	if runtimeCfg.Port != 7437 {
+		t.Fatalf("Port = %d, want 7437", runtimeCfg.Port)
+	}
+	if runtimeCfg.BaseURL != "http://127.0.0.1:7437" {
+		t.Fatalf("BaseURL = %q, want http://127.0.0.1:7437", runtimeCfg.BaseURL)
+	}
+	if runtimeCfg.CookieSecure {
+		t.Fatalf("CookieSecure = true, want false")
+	}
+	if runtimeCfg.DataDir != cfg.DataDir {
+		t.Fatalf("DataDir = %q, want %q", runtimeCfg.DataDir, cfg.DataDir)
+	}
+}
+
+func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
+	cfg := testConfig(t)
+	t.Setenv("LORE_ENV", "staging")
+	t.Setenv("LORE_HOST", "")
+	t.Setenv("LORE_PORT", "")
+	t.Setenv("LORE_COOKIE_SECURE", "")
+	t.Setenv("LORE_GOOGLE_CLIENT_ID", "")
+	t.Setenv("LORE_GOOGLE_CLIENT_SECRET", "")
+	t.Setenv("LORE_GITHUB_CLIENT_ID", "")
+	t.Setenv("LORE_GITHUB_CLIENT_SECRET", "")
+
+	t.Run("missing LORE_BASE_URL", func(t *testing.T) {
+		t.Setenv("LORE_BASE_URL", "")
+		t.Setenv("LORE_JWT_SECRET", "secret")
+
+		_, err := loadRuntimeConfig(cfg, nil)
+		if err == nil || !strings.Contains(err.Error(), "LORE_BASE_URL is required when LORE_ENV=staging") {
+			t.Fatalf("expected LORE_BASE_URL staging error, got %v", err)
+		}
+	})
+
+	t.Run("missing LORE_JWT_SECRET", func(t *testing.T) {
+		t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
+		t.Setenv("LORE_JWT_SECRET", "")
+
+		_, err := loadRuntimeConfig(cfg, nil)
+		if err == nil || !strings.Contains(err.Error(), "LORE_JWT_SECRET is required when LORE_ENV=staging") {
+			t.Fatalf("expected LORE_JWT_SECRET staging error, got %v", err)
+		}
+	})
+
+	t.Run("staging defaults", func(t *testing.T) {
+		t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
+		t.Setenv("LORE_JWT_SECRET", "secret")
+
+		runtimeCfg, err := loadRuntimeConfig(cfg, nil)
+		if err != nil {
+			t.Fatalf("loadRuntimeConfig() error = %v", err)
+		}
+		if runtimeCfg.Env != RuntimeEnvStaging {
+			t.Fatalf("Env = %q, want %q", runtimeCfg.Env, RuntimeEnvStaging)
+		}
+		if runtimeCfg.Host != "0.0.0.0" {
+			t.Fatalf("Host = %q, want 0.0.0.0", runtimeCfg.Host)
+		}
+		if !runtimeCfg.CookieSecure {
+			t.Fatalf("CookieSecure = false, want true")
+		}
+	})
+}
+
+func TestLoadRuntimeConfigInvalidValues(t *testing.T) {
+	cfg := testConfig(t)
+
+	t.Setenv("LORE_ENV", "prod")
+	if _, err := loadRuntimeConfig(cfg, nil); err == nil || !strings.Contains(err.Error(), "invalid LORE_ENV") {
+		t.Fatalf("expected invalid env error, got %v", err)
+	}
+
+	t.Setenv("LORE_ENV", "local")
+	t.Setenv("LORE_COOKIE_SECURE", "definitely")
+	if _, err := loadRuntimeConfig(cfg, nil); err == nil || !strings.Contains(err.Error(), "invalid LORE_COOKIE_SECURE") {
+		t.Fatalf("expected invalid cookie bool error, got %v", err)
+	}
+}
+
+func TestCmdServeStagingMissingJWTSecretFailsFast(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+	stubExitWithPanic(t)
+
+	t.Setenv("LORE_ENV", "staging")
+	t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
+	t.Setenv("LORE_JWT_SECRET", "")
+	withArgs(t, "lore", "serve")
+
+	storeCalled := false
+	storeNew = func(store.Config) (*store.Store, error) {
+		storeCalled = true
+		return nil, nil
+	}
+
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdServe(cfg) })
+
+	if _, ok := recovered.(exitCode); !ok {
+		t.Fatalf("expected fatal exit, got %v", recovered)
+	}
+	if !strings.Contains(stderr, "LORE_JWT_SECRET is required when LORE_ENV=staging") {
+		t.Fatalf("expected staging JWT guardrail error, got %q", stderr)
+	}
+	if storeCalled {
+		t.Fatalf("expected fail-fast before store initialization")
+	}
+}
+
+func TestCmdServeStagingMissingBaseURLFailsFast(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+	stubExitWithPanic(t)
+
+	t.Setenv("LORE_ENV", "staging")
+	t.Setenv("LORE_BASE_URL", "")
+	t.Setenv("LORE_JWT_SECRET", "secret")
+	withArgs(t, "lore", "serve")
+
+	storeCalled := false
+	storeNew = func(store.Config) (*store.Store, error) {
+		storeCalled = true
+		return nil, nil
+	}
+
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdServe(cfg) })
+
+	if _, ok := recovered.(exitCode); !ok {
+		t.Fatalf("expected fatal exit, got %v", recovered)
+	}
+	if !strings.Contains(stderr, "LORE_BASE_URL is required when LORE_ENV=staging") {
+		t.Fatalf("expected staging BASE_URL guardrail error, got %q", stderr)
+	}
+	if storeCalled {
+		t.Fatalf("expected fail-fast before store initialization")
+	}
+}
+
+func TestCmdServeStagingWithRequiredVarsStartsSuccessfully(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+
+	t.Setenv("LORE_ENV", "staging")
+	t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
+	t.Setenv("LORE_JWT_SECRET", "super-secret")
+	t.Setenv("LORE_HOST", "")
+	withArgs(t, "lore", "serve")
+
+	storeCalled := false
+	startCalled := false
+	boundHost := ""
+
+	storeNew = func(in store.Config) (*store.Store, error) {
+		storeCalled = true
+		return store.New(in)
+	}
+	newHTTPServer = func(s *store.Store, cfg server.Config) *server.Server {
+		boundHost = cfg.Host
+		return server.NewWithConfig(s, cfg)
+	}
+	startHTTP = func(_ *server.Server) error {
+		startCalled = true
+		return nil
+	}
+
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdServe(cfg) })
+	if recovered != nil {
+		t.Fatalf("expected successful startup, got panic=%v stderr=%q", recovered, stderr)
+	}
+	if !storeCalled {
+		t.Fatalf("expected store initialization on staging startup")
+	}
+	if !startCalled {
+		t.Fatalf("expected HTTP server start to be invoked")
+	}
+	if boundHost != "0.0.0.0" {
+		t.Fatalf("expected staging default host 0.0.0.0, got %q", boundHost)
+	}
 }
 
 func TestTruncate(t *testing.T) {
