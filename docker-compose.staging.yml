@@ -9,6 +9,7 @@ services:
     ports:
       - "7437:7437"
     volumes:
+      # Docker deployment path: persist local SQLite files on this volume.
       # SQLite WAL mode creates lore.db, lore.db-wal, and lore.db-shm.
       # All three files must live on the same persistent volume (LORE_DATA_DIR).
       # Removing this volume mount risks apparent data loss on container restart.

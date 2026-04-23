@@ -346,6 +346,7 @@ type ExportData struct {
 
 type Config struct {
 	DataDir              string
+	DatabaseURL          string
 	MaxObservationLength int
 	MaxContextResults    int
 	MaxSearchResults     int
@@ -359,6 +360,7 @@ func DefaultConfig() (Config, error) {
 	}
 	return Config{
 		DataDir:              filepath.Join(home, ".lore"),
+		DatabaseURL:          "",
 		MaxObservationLength: 50000,
 		MaxContextResults:    20,
 		MaxSearchResults:     20,
@@ -372,6 +374,7 @@ func DefaultConfig() (Config, error) {
 func FallbackConfig(dataDir string) Config {
 	return Config{
 		DataDir:              dataDir,
+		DatabaseURL:          "",
 		MaxObservationLength: 50000,
 		MaxContextResults:    20,
 		MaxSearchResults:     20,

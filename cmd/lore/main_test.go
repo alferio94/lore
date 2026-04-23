@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alferio94/lore/internal/admin"
 	"github.com/alferio94/lore/internal/mcp"
 	"github.com/alferio94/lore/internal/obsidian"
 	"github.com/alferio94/lore/internal/server"
@@ -124,10 +125,10 @@ func mustSeedObservation(t *testing.T, cfg store.Config, sessionID, project, typ
 }
 
 func TestLoadRuntimeConfigLocalDefaults(t *testing.T) {
-	cfg := testConfig(t)
 	t.Setenv("LORE_ENV", "")
 	t.Setenv("LORE_HOST", "")
 	t.Setenv("LORE_PORT", "")
+	t.Setenv("PORT", "")
 	t.Setenv("LORE_BASE_URL", "")
 	t.Setenv("LORE_JWT_SECRET", "")
 	t.Setenv("LORE_COOKIE_SECURE", "")
@@ -136,7 +137,7 @@ func TestLoadRuntimeConfigLocalDefaults(t *testing.T) {
 	t.Setenv("LORE_GITHUB_CLIENT_ID", "")
 	t.Setenv("LORE_GITHUB_CLIENT_SECRET", "")
 
-	runtimeCfg, err := loadRuntimeConfig(cfg, []string{})
+	runtimeCfg, err := loadRuntimeConfig([]string{})
 	if err != nil {
 		t.Fatalf("loadRuntimeConfig() error = %v", err)
 	}
@@ -156,16 +157,13 @@ func TestLoadRuntimeConfigLocalDefaults(t *testing.T) {
 	if runtimeCfg.CookieSecure {
 		t.Fatalf("CookieSecure = true, want false")
 	}
-	if runtimeCfg.DataDir != cfg.DataDir {
-		t.Fatalf("DataDir = %q, want %q", runtimeCfg.DataDir, cfg.DataDir)
-	}
 }
 
 func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
-	cfg := testConfig(t)
 	t.Setenv("LORE_ENV", "staging")
 	t.Setenv("LORE_HOST", "")
 	t.Setenv("LORE_PORT", "")
+	t.Setenv("PORT", "")
 	t.Setenv("LORE_COOKIE_SECURE", "")
 	t.Setenv("LORE_GOOGLE_CLIENT_ID", "")
 	t.Setenv("LORE_GOOGLE_CLIENT_SECRET", "")
@@ -176,7 +174,7 @@ func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
 		t.Setenv("LORE_BASE_URL", "")
 		t.Setenv("LORE_JWT_SECRET", "secret")
 
-		_, err := loadRuntimeConfig(cfg, nil)
+		_, err := loadRuntimeConfig(nil)
 		if err == nil || !strings.Contains(err.Error(), "LORE_BASE_URL is required when LORE_ENV=staging") {
 			t.Fatalf("expected LORE_BASE_URL staging error, got %v", err)
 		}
@@ -186,7 +184,7 @@ func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
 		t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
 		t.Setenv("LORE_JWT_SECRET", "")
 
-		_, err := loadRuntimeConfig(cfg, nil)
+		_, err := loadRuntimeConfig(nil)
 		if err == nil || !strings.Contains(err.Error(), "LORE_JWT_SECRET is required when LORE_ENV=staging") {
 			t.Fatalf("expected LORE_JWT_SECRET staging error, got %v", err)
 		}
@@ -196,7 +194,7 @@ func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
 		t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
 		t.Setenv("LORE_JWT_SECRET", "secret")
 
-		runtimeCfg, err := loadRuntimeConfig(cfg, nil)
+		runtimeCfg, err := loadRuntimeConfig(nil)
 		if err != nil {
 			t.Fatalf("loadRuntimeConfig() error = %v", err)
 		}
@@ -213,17 +211,157 @@ func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
 }
 
 func TestLoadRuntimeConfigInvalidValues(t *testing.T) {
-	cfg := testConfig(t)
-
 	t.Setenv("LORE_ENV", "prod")
-	if _, err := loadRuntimeConfig(cfg, nil); err == nil || !strings.Contains(err.Error(), "invalid LORE_ENV") {
+	if _, err := loadRuntimeConfig(nil); err == nil || !strings.Contains(err.Error(), "invalid LORE_ENV") {
 		t.Fatalf("expected invalid env error, got %v", err)
 	}
 
 	t.Setenv("LORE_ENV", "local")
 	t.Setenv("LORE_COOKIE_SECURE", "definitely")
-	if _, err := loadRuntimeConfig(cfg, nil); err == nil || !strings.Contains(err.Error(), "invalid LORE_COOKIE_SECURE") {
+	if _, err := loadRuntimeConfig(nil); err == nil || !strings.Contains(err.Error(), "invalid LORE_COOKIE_SECURE") {
 		t.Fatalf("expected invalid cookie bool error, got %v", err)
+	}
+}
+
+func TestAdminGenerateSecretProducesHexSecret(t *testing.T) {
+	secret := adminGenerateSecret()
+	if len(secret) != 32 {
+		t.Fatalf("secret length = %d, want 32 hex chars", len(secret))
+	}
+	for _, b := range secret {
+		if !((b >= '0' && b <= '9') || (b >= 'a' && b <= 'f')) {
+			t.Fatalf("secret contains non-hex byte %q", b)
+		}
+	}
+}
+
+func TestResolveHomeFallback(t *testing.T) {
+	t.Run("uses USERPROFILE when present", func(t *testing.T) {
+		t.Setenv("USERPROFILE", "/tmp/userprofile")
+		t.Setenv("HOME", "")
+		t.Setenv("LOCALAPPDATA", "")
+		if got := resolveHomeFallback(); got != "/tmp/userprofile" {
+			t.Fatalf("resolveHomeFallback() = %q, want /tmp/userprofile", got)
+		}
+	})
+
+	t.Run("derives parent from LOCALAPPDATA", func(t *testing.T) {
+		t.Setenv("USERPROFILE", "")
+		t.Setenv("HOME", "")
+		t.Setenv("LOCALAPPDATA", "/Users/alice/AppData/Local")
+		if got := resolveHomeFallback(); got != "/Users/alice" {
+			t.Fatalf("resolveHomeFallback() = %q, want /Users/alice", got)
+		}
+	})
+
+	t.Run("returns empty when no hints exist", func(t *testing.T) {
+		t.Setenv("USERPROFILE", "")
+		t.Setenv("HOME", "")
+		t.Setenv("LOCALAPPDATA", "")
+		if got := resolveHomeFallback(); got != "" {
+			t.Fatalf("resolveHomeFallback() = %q, want empty", got)
+		}
+	})
+}
+
+func TestAdminBuildOAuthConfigsWiresCallbacks(t *testing.T) {
+	base := admin.AdminConfig{
+		BaseURL:            "https://lore.example",
+		GoogleClientID:     "google-id",
+		GoogleClientSecret: "google-secret",
+		GitHubClientID:     "github-id",
+		GitHubClientSecret: "github-secret",
+	}
+
+	built := adminBuildOAuthConfigs(base)
+	if built.GoogleOAuth == nil {
+		t.Fatalf("expected GoogleOAuth config when credentials are set")
+	}
+	if built.GoogleOAuth.RedirectURL != "https://lore.example/admin/auth/callback/google" {
+		t.Fatalf("google redirect = %q", built.GoogleOAuth.RedirectURL)
+	}
+	if built.GithubOAuth == nil {
+		t.Fatalf("expected GithubOAuth config when credentials are set")
+	}
+	if built.GithubOAuth.RedirectURL != "https://lore.example/admin/auth/callback/github" {
+		t.Fatalf("github redirect = %q", built.GithubOAuth.RedirectURL)
+	}
+
+	withoutCreds := adminBuildOAuthConfigs(admin.AdminConfig{BaseURL: "https://lore.example"})
+	if withoutCreds.GoogleOAuth != nil || withoutCreds.GithubOAuth != nil {
+		t.Fatalf("expected oauth configs to stay nil without credentials")
+	}
+}
+
+func TestLoadStorageConfigDefaultsToStoreConfig(t *testing.T) {
+	base := testConfig(t)
+	t.Setenv("LORE_DATA_DIR", "")
+	t.Setenv("DATABASE_URL", "")
+
+	storageCfg, err := loadStorageConfig(base)
+	if err != nil {
+		t.Fatalf("loadStorageConfig() error = %v", err)
+	}
+
+	if storageCfg.DataDir != base.DataDir {
+		t.Fatalf("DataDir = %q, want %q", storageCfg.DataDir, base.DataDir)
+	}
+	if storageCfg.DatabaseURL != "" {
+		t.Fatalf("DatabaseURL = %q, want empty", storageCfg.DatabaseURL)
+	}
+}
+
+func TestLoadStorageConfigReadsOverridesAndValidatesDatabaseURL(t *testing.T) {
+	base := testConfig(t)
+	overrideDir := t.TempDir()
+
+	t.Setenv("LORE_DATA_DIR", overrideDir)
+	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
+
+	storageCfg, err := loadStorageConfig(base)
+	if err != nil {
+		t.Fatalf("loadStorageConfig() error = %v", err)
+	}
+
+	if storageCfg.DataDir != overrideDir {
+		t.Fatalf("DataDir = %q, want %q", storageCfg.DataDir, overrideDir)
+	}
+	if storageCfg.DatabaseURL != "postgres://lore:secret@db.internal:5432/lore" {
+		t.Fatalf("DatabaseURL = %q, want original URL", storageCfg.DatabaseURL)
+	}
+
+	applied := storageCfg.Apply(base)
+	if applied.DataDir != overrideDir {
+		t.Fatalf("applied DataDir = %q, want %q", applied.DataDir, overrideDir)
+	}
+	if applied.DatabaseURL != storageCfg.DatabaseURL {
+		t.Fatalf("applied DatabaseURL = %q, want %q", applied.DatabaseURL, storageCfg.DatabaseURL)
+	}
+}
+
+func TestLoadStorageConfigAcceptsPathBasedDatabaseURL(t *testing.T) {
+	base := testConfig(t)
+	t.Setenv("DATABASE_URL", "sqlite:///tmp/lore.db")
+
+	storageCfg, err := loadStorageConfig(base)
+	if err != nil {
+		t.Fatalf("loadStorageConfig() error = %v", err)
+	}
+	if storageCfg.DatabaseURL != "sqlite:///tmp/lore.db" {
+		t.Fatalf("DatabaseURL = %q, want sqlite:///tmp/lore.db", storageCfg.DatabaseURL)
+	}
+}
+
+func TestLoadStorageConfigRejectsMalformedDatabaseURL(t *testing.T) {
+	base := testConfig(t)
+	t.Setenv("DATABASE_URL", "localhost:5432/lore")
+
+	_, err := loadStorageConfig(base)
+	if err == nil {
+		t.Fatalf("expected DATABASE_URL validation error")
+	}
+	if !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Fatalf("expected DATABASE_URL mention in error, got %v", err)
 	}
 }
 
@@ -253,6 +391,75 @@ func TestCmdServeStagingMissingJWTSecretFailsFast(t *testing.T) {
 	}
 	if storeCalled {
 		t.Fatalf("expected fail-fast before store initialization")
+	}
+}
+
+func TestCmdServeInvalidDatabaseURLFailsFastBeforeStoreInit(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+	stubExitWithPanic(t)
+
+	t.Setenv("LORE_ENV", "local")
+	t.Setenv("DATABASE_URL", "postgres://")
+	withArgs(t, "lore", "serve")
+
+	storeCalled := false
+	storeNew = func(store.Config) (*store.Store, error) {
+		storeCalled = true
+		return nil, nil
+	}
+
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdServe(cfg) })
+
+	if _, ok := recovered.(exitCode); !ok {
+		t.Fatalf("expected fatal exit, got %v", recovered)
+	}
+	if !strings.Contains(stderr, "DATABASE_URL") {
+		t.Fatalf("expected DATABASE_URL config error, got %q", stderr)
+	}
+	if storeCalled {
+		t.Fatalf("expected fail-fast before store initialization")
+	}
+}
+
+func TestCmdServeValidDatabaseURLDoesNotEnablePostgresPath(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+	storageDir := t.TempDir()
+
+	t.Setenv("LORE_ENV", "local")
+	t.Setenv("LORE_HOST", "127.0.0.1")
+	t.Setenv("PORT", "7555")
+	t.Setenv("LORE_DATA_DIR", storageDir)
+	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
+	withArgs(t, "lore", "serve")
+
+	seenDatabaseURL := ""
+	seenDataDir := ""
+	seenPort := 0
+	storeNew = func(in store.Config) (*store.Store, error) {
+		seenDatabaseURL = in.DatabaseURL
+		seenDataDir = in.DataDir
+		return store.New(in)
+	}
+	newHTTPServer = func(s *store.Store, cfg server.Config) *server.Server {
+		seenPort = cfg.Port
+		return server.NewWithConfig(s, cfg)
+	}
+	startHTTP = func(_ *server.Server) error { return nil }
+
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdServe(cfg) })
+	if recovered != nil {
+		t.Fatalf("expected successful startup, got panic=%v stderr=%q", recovered, stderr)
+	}
+	if seenDatabaseURL == "" {
+		t.Fatalf("expected store config to retain DATABASE_URL")
+	}
+	if seenDataDir != storageDir {
+		t.Fatalf("expected storage config DataDir %q, got %q", storageDir, seenDataDir)
+	}
+	if seenPort != 7555 {
+		t.Fatalf("expected runtime port 7555 from PORT fallback, got %d", seenPort)
 	}
 }
 
