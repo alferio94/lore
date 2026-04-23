@@ -863,7 +863,7 @@ func TestHandleContextWithSessionOnlyUsesNoneProjects(t *testing.T) {
 
 func TestHandleStatsReturnsErrorWhenLoaderFails(t *testing.T) {
 	prev := loadMCPStats
-	loadMCPStats = func(s *store.Store) (*store.Stats, error) {
+	loadMCPStats = func(s store.Contract) (*store.Stats, error) {
 		return nil, errors.New("stats unavailable")
 	}
 	t.Cleanup(func() {

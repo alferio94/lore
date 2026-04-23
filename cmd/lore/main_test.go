@@ -376,7 +376,7 @@ func TestCmdServeStagingMissingJWTSecretFailsFast(t *testing.T) {
 	withArgs(t, "lore", "serve")
 
 	storeCalled := false
-	storeNew = func(store.Config) (*store.Store, error) {
+	storeOpen = func(store.Config) (store.Contract, error) {
 		storeCalled = true
 		return nil, nil
 	}
@@ -404,7 +404,7 @@ func TestCmdServeInvalidDatabaseURLFailsFastBeforeStoreInit(t *testing.T) {
 	withArgs(t, "lore", "serve")
 
 	storeCalled := false
-	storeNew = func(store.Config) (*store.Store, error) {
+	storeOpen = func(store.Config) (store.Contract, error) {
 		storeCalled = true
 		return nil, nil
 	}
@@ -437,12 +437,15 @@ func TestCmdServeValidDatabaseURLDoesNotEnablePostgresPath(t *testing.T) {
 	seenDatabaseURL := ""
 	seenDataDir := ""
 	seenPort := 0
-	storeNew = func(in store.Config) (*store.Store, error) {
+	storeOpen = func(in store.Config) (store.Contract, error) {
 		seenDatabaseURL = in.DatabaseURL
 		seenDataDir = in.DataDir
+		if in.SelectedBackend() != store.BackendSQLite {
+			t.Fatalf("SelectedBackend() = %q, want %q", in.SelectedBackend(), store.BackendSQLite)
+		}
 		return store.New(in)
 	}
-	newHTTPServer = func(s *store.Store, cfg server.Config) *server.Server {
+	newHTTPServer = func(s store.Contract, cfg server.Config) *server.Server {
 		seenPort = cfg.Port
 		return server.NewWithConfig(s, cfg)
 	}
@@ -474,7 +477,7 @@ func TestCmdServeStagingMissingBaseURLFailsFast(t *testing.T) {
 	withArgs(t, "lore", "serve")
 
 	storeCalled := false
-	storeNew = func(store.Config) (*store.Store, error) {
+	storeOpen = func(store.Config) (store.Contract, error) {
 		storeCalled = true
 		return nil, nil
 	}
@@ -506,11 +509,14 @@ func TestCmdServeStagingWithRequiredVarsStartsSuccessfully(t *testing.T) {
 	startCalled := false
 	boundHost := ""
 
-	storeNew = func(in store.Config) (*store.Store, error) {
+	storeOpen = func(in store.Config) (store.Contract, error) {
 		storeCalled = true
+		if in.SelectedBackend() != store.BackendSQLite {
+			t.Fatalf("SelectedBackend() = %q, want %q", in.SelectedBackend(), store.BackendSQLite)
+		}
 		return store.New(in)
 	}
-	newHTTPServer = func(s *store.Store, cfg server.Config) *server.Server {
+	newHTTPServer = func(s store.Contract, cfg server.Config) *server.Server {
 		boundHost = cfg.Host
 		return server.NewWithConfig(s, cfg)
 	}
@@ -1270,7 +1276,7 @@ func TestCmdMCPDetectsProjectFromFlag(t *testing.T) {
 	var capturedCfg mcp.MCPConfig
 	oldNew := newMCPServerWithConfig
 	t.Cleanup(func() { newMCPServerWithConfig = oldNew })
-	newMCPServerWithConfig = func(s *store.Store, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
+	newMCPServerWithConfig = func(s store.Contract, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
 		capturedCfg = mcpCfg
 		// Return a valid server so serveMCP doesn't panic
 		return oldNew(s, mcpCfg, allowlist)
@@ -1299,7 +1305,7 @@ func TestCmdMCPDetectsProjectFromEnv(t *testing.T) {
 	var capturedCfg mcp.MCPConfig
 	oldNew := newMCPServerWithConfig
 	t.Cleanup(func() { newMCPServerWithConfig = oldNew })
-	newMCPServerWithConfig = func(s *store.Store, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
+	newMCPServerWithConfig = func(s store.Contract, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
 		capturedCfg = mcpCfg
 		return oldNew(s, mcpCfg, allowlist)
 	}
@@ -1329,7 +1335,7 @@ func TestCmdMCPDetectsProjectFromGit(t *testing.T) {
 	var capturedCfg mcp.MCPConfig
 	oldNew := newMCPServerWithConfig
 	t.Cleanup(func() { newMCPServerWithConfig = oldNew })
-	newMCPServerWithConfig = func(s *store.Store, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
+	newMCPServerWithConfig = func(s store.Contract, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
 		capturedCfg = mcpCfg
 		return oldNew(s, mcpCfg, allowlist)
 	}

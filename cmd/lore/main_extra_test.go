@@ -79,7 +79,7 @@ func stubExitWithPanic(t *testing.T) {
 
 func stubRuntimeHooks(t *testing.T) {
 	t.Helper()
-	oldStoreNew := storeNew
+	oldStoreOpen := storeOpen
 	oldNewHTTPServer := newHTTPServer
 	oldStartHTTP := startHTTP
 	oldNewMCPServer := newMCPServer
@@ -104,36 +104,36 @@ func stubRuntimeHooks(t *testing.T) {
 	oldCheckForUpdates := checkForUpdates
 	oldMountAdmin := mountAdmin
 
-	storeNew = store.New
-	newHTTPServer = func(s *store.Store, cfg engramsrv.Config) *engramsrv.Server { return engramsrv.NewWithConfig(s, cfg) }
+	storeOpen = store.Open
+	newHTTPServer = func(s store.Contract, cfg engramsrv.Config) *engramsrv.Server { return engramsrv.NewWithConfig(s, cfg) }
 	startHTTP = func(_ *engramsrv.Server) error { return nil }
-	newMCPServer = func(s *store.Store) *mcpserver.MCPServer {
+	newMCPServer = func(s store.Contract) *mcpserver.MCPServer {
 		return mcpserver.NewMCPServer("test", "0", mcpserver.WithRecovery())
 	}
-	newMCPServerWithTools = func(s *store.Store, allowlist map[string]bool) *mcpserver.MCPServer {
+	newMCPServerWithTools = func(s store.Contract, allowlist map[string]bool) *mcpserver.MCPServer {
 		return mcpserver.NewMCPServer("test", "0", mcpserver.WithRecovery())
 	}
 	serveMCP = func(_ *mcpserver.MCPServer, _ ...mcpserver.StdioOption) error { return nil }
-	newTUIModel = func(_ *store.Store) tui.Model { return tui.New(nil, "") }
+	newTUIModel = func(_ store.Contract) tui.Model { return tui.New(nil, "") }
 	newTeaProgram = func(tea.Model, ...tea.ProgramOption) *tea.Program { return &tea.Program{} }
 	runTeaProgram = func(*tea.Program) (tea.Model, error) { return nil, nil }
 	setupSupportedAgents = setup.SupportedAgents
 	setupInstallAgent = setup.Install
 	scanInputLine = fmt.Scanln
-	storeSearch = func(s *store.Store, query string, opts store.SearchOptions) ([]store.SearchResult, error) {
+	storeSearch = func(s store.Contract, query string, opts store.SearchOptions) ([]store.SearchResult, error) {
 		return s.Search(query, opts)
 	}
-	storeAddObservation = func(s *store.Store, p store.AddObservationParams) (int64, error) {
+	storeAddObservation = func(s store.Contract, p store.AddObservationParams) (int64, error) {
 		return s.AddObservation(p)
 	}
-	storeTimeline = func(s *store.Store, observationID int64, before, after int) (*store.TimelineResult, error) {
+	storeTimeline = func(s store.Contract, observationID int64, before, after int) (*store.TimelineResult, error) {
 		return s.Timeline(observationID, before, after)
 	}
-	storeFormatContext = func(s *store.Store, project, scope string) (string, error) {
+	storeFormatContext = func(s store.Contract, project, scope string) (string, error) {
 		return s.FormatContext(project, scope)
 	}
-	storeStats = func(s *store.Store) (*store.Stats, error) { return s.Stats() }
-	storeExport = func(s *store.Store) (*store.ExportData, error) { return s.Export() }
+	storeStats = func(s store.Contract) (*store.Stats, error) { return s.Stats() }
+	storeExport = func(s store.Contract) (*store.ExportData, error) { return s.Export() }
 	jsonMarshalIndent = json.MarshalIndent
 	syncStatus = func(sy *engramsync.Syncer) (localChunks int, remoteChunks int, pendingImport int, err error) {
 		return sy.Status()
@@ -148,7 +148,7 @@ func stubRuntimeHooks(t *testing.T) {
 	mountAdmin = admin.Mount
 
 	t.Cleanup(func() {
-		storeNew = oldStoreNew
+		storeOpen = oldStoreOpen
 		newHTTPServer = oldNewHTTPServer
 		startHTTP = oldStartHTTP
 		newMCPServer = oldNewMCPServer
@@ -234,7 +234,7 @@ func TestCmdServeParsesPortAndErrors(t *testing.T) {
 			withArgs(t, args...)
 
 			seenPort := -1
-			newHTTPServer = func(s *store.Store, cfg engramsrv.Config) *engramsrv.Server {
+			newHTTPServer = func(s store.Contract, cfg engramsrv.Config) *engramsrv.Server {
 				seenPort = cfg.Port
 				return engramsrv.NewWithConfig(s, cfg)
 			}
@@ -432,7 +432,7 @@ func TestStoreInitFailurePaths(t *testing.T) {
 		t.Fatalf("write import file: %v", err)
 	}
 
-	storeNew = func(store.Config) (*store.Store, error) {
+	storeOpen = func(store.Config) (store.Contract, error) {
 		return nil, errors.New("store init failed")
 	}
 
@@ -815,7 +815,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 
 	t.Run("search seam error", func(t *testing.T) {
 		withArgs(t, "lore", "search", "needle")
-		storeSearch = func(*store.Store, string, store.SearchOptions) ([]store.SearchResult, error) {
+		storeSearch = func(store.Contract, string, store.SearchOptions) ([]store.SearchResult, error) {
 			return nil, errors.New("forced search error")
 		}
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdSearch(cfg) })
@@ -824,7 +824,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 
 	t.Run("save seam error", func(t *testing.T) {
 		withArgs(t, "lore", "save", "title", "content")
-		storeAddObservation = func(*store.Store, store.AddObservationParams) (int64, error) {
+		storeAddObservation = func(store.Contract, store.AddObservationParams) (int64, error) {
 			return 0, errors.New("forced save error")
 		}
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdSave(cfg) })
@@ -833,7 +833,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 
 	t.Run("timeline seam error", func(t *testing.T) {
 		withArgs(t, "lore", "timeline", "1")
-		storeTimeline = func(*store.Store, int64, int, int) (*store.TimelineResult, error) {
+		storeTimeline = func(store.Contract, int64, int, int) (*store.TimelineResult, error) {
 			return nil, errors.New("forced timeline error")
 		}
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdTimeline(cfg) })
@@ -843,7 +843,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 	t.Run("timeline prints session summary", func(t *testing.T) {
 		summary := "this session has a non-empty summary"
 		withArgs(t, "lore", "timeline", "1")
-		storeTimeline = func(*store.Store, int64, int, int) (*store.TimelineResult, error) {
+		storeTimeline = func(store.Contract, int64, int, int) (*store.TimelineResult, error) {
 			return &store.TimelineResult{
 				Focus:        store.Observation{ID: 1, Type: "note", Title: "focus", Content: "content", CreatedAt: "2026-01-01"},
 				SessionInfo:  &store.Session{Project: "proj", StartedAt: "2026-01-01", Summary: &summary},
@@ -861,7 +861,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 
 	t.Run("context seam error", func(t *testing.T) {
 		withArgs(t, "lore", "context")
-		storeFormatContext = func(*store.Store, string, string) (string, error) {
+		storeFormatContext = func(store.Contract, string, string) (string, error) {
 			return "", errors.New("forced context error")
 		}
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdContext(cfg) })
@@ -870,7 +870,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 
 	t.Run("stats seam error", func(t *testing.T) {
 		withArgs(t, "lore", "stats")
-		storeStats = func(*store.Store) (*store.Stats, error) {
+		storeStats = func(store.Contract) (*store.Stats, error) {
 			return nil, errors.New("forced stats error")
 		}
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdStats(cfg) })
@@ -879,7 +879,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 
 	t.Run("export seam error", func(t *testing.T) {
 		withArgs(t, "lore", "export")
-		storeExport = func(*store.Store) (*store.ExportData, error) {
+		storeExport = func(store.Contract) (*store.ExportData, error) {
 			return nil, errors.New("forced export error")
 		}
 		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdExport(cfg) })
@@ -888,7 +888,7 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 
 	t.Run("export marshal seam error", func(t *testing.T) {
 		withArgs(t, "lore", "export")
-		storeExport = func(s *store.Store) (*store.ExportData, error) { return s.Export() }
+		storeExport = func(s store.Contract) (*store.ExportData, error) { return s.Export() }
 		jsonMarshalIndent = func(any, string, string) ([]byte, error) {
 			return nil, errors.New("forced marshal error")
 		}
@@ -956,7 +956,7 @@ func TestCmdServeWiresMCPHandler(t *testing.T) {
 	oldMCPHTTPHandler := newMCPHTTPHandler
 	t.Cleanup(func() { newMCPHTTPHandler = oldMCPHTTPHandler })
 	// Inject a real stub handler that returns 200 OK for any request.
-	newMCPHTTPHandler = func(s *store.Store, projectHint string) http.Handler {
+	newMCPHTTPHandler = func(s store.Contract, projectHint string) http.Handler {
 		mcpHandlerCalled = true
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -966,7 +966,7 @@ func TestCmdServeWiresMCPHandler(t *testing.T) {
 	// Capture the server returned by newHTTPServer so we can query it later.
 	oldNewHTTPServer := newHTTPServer
 	t.Cleanup(func() { newHTTPServer = oldNewHTTPServer })
-	newHTTPServer = func(s *store.Store, cfg engramsrv.Config) *engramsrv.Server {
+	newHTTPServer = func(s store.Contract, cfg engramsrv.Config) *engramsrv.Server {
 		srv := engramsrv.NewWithConfig(s, cfg)
 		capturedSrv = srv
 		return srv
@@ -1010,7 +1010,7 @@ func TestCmdServeUsesProjectHintFromEnv(t *testing.T) {
 	var capturedHint string
 	oldMCPHTTPHandler := newMCPHTTPHandler
 	t.Cleanup(func() { newMCPHTTPHandler = oldMCPHTTPHandler })
-	newMCPHTTPHandler = func(s *store.Store, projectHint string) http.Handler {
+	newMCPHTTPHandler = func(s store.Contract, projectHint string) http.Handler {
 		capturedHint = projectHint
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -1052,17 +1052,17 @@ func TestCmdServeRuntimeContractIntegrationLike(t *testing.T) {
 	seenProjectHint := ""
 	adminMounted := false
 
-	storeNew = func(in store.Config) (*store.Store, error) {
+	storeOpen = func(in store.Config) (store.Contract, error) {
 		seenStoreDataDir = in.DataDir
 		seenStoreDatabaseURL = in.DatabaseURL
 		return store.New(in)
 	}
-	newHTTPServer = func(s *store.Store, cfg engramsrv.Config) *engramsrv.Server {
+	newHTTPServer = func(s store.Contract, cfg engramsrv.Config) *engramsrv.Server {
 		seenServerHost = cfg.Host
 		seenServerPort = cfg.Port
 		return engramsrv.NewWithConfig(s, cfg)
 	}
-	newMCPHTTPHandler = func(_ *store.Store, projectHint string) http.Handler {
+	newMCPHTTPHandler = func(_ store.Contract, projectHint string) http.Handler {
 		seenProjectHint = projectHint
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
@@ -1137,7 +1137,7 @@ func TestCmdMCP(t *testing.T) {
 
 	t.Run("no tools filter uses newMCPServerWithConfig with nil allowlist", func(t *testing.T) {
 		called := false
-		newMCPServerWithConfig = func(s *store.Store, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
+		newMCPServerWithConfig = func(s store.Contract, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
 			called = true
 			if allowlist != nil {
 				t.Errorf("expected nil allowlist for no tools filter, got %v", allowlist)
@@ -1156,7 +1156,7 @@ func TestCmdMCP(t *testing.T) {
 
 	t.Run("--tools flag uses newMCPServerWithConfig with non-nil allowlist", func(t *testing.T) {
 		var gotAllowlist map[string]bool
-		newMCPServerWithConfig = func(s *store.Store, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
+		newMCPServerWithConfig = func(s store.Contract, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
 			gotAllowlist = allowlist
 			return mcpserver.NewMCPServer("test", "0")
 		}
@@ -1172,7 +1172,7 @@ func TestCmdMCP(t *testing.T) {
 
 	t.Run("--tools as separate arg uses newMCPServerWithConfig with non-nil allowlist", func(t *testing.T) {
 		var gotAllowlist map[string]bool
-		newMCPServerWithConfig = func(s *store.Store, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
+		newMCPServerWithConfig = func(s store.Contract, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
 			gotAllowlist = allowlist
 			return mcpserver.NewMCPServer("test", "0")
 		}
@@ -1186,8 +1186,8 @@ func TestCmdMCP(t *testing.T) {
 		}
 	})
 
-	t.Run("storeNew failure calls fatal", func(t *testing.T) {
-		storeNew = func(cfg store.Config) (*store.Store, error) {
+	t.Run("storeOpen failure calls fatal", func(t *testing.T) {
+		storeOpen = func(cfg store.Config) (store.Contract, error) {
 			return nil, errors.New("db open failed")
 		}
 		withArgs(t, "lore", "mcp")
@@ -1196,7 +1196,7 @@ func TestCmdMCP(t *testing.T) {
 	})
 
 	t.Run("serveMCP failure calls fatal", func(t *testing.T) {
-		storeNew = store.New
+		storeOpen = store.Open
 		serveMCP = func(_ *mcpserver.MCPServer, _ ...mcpserver.StdioOption) error {
 			return errors.New("stdio failed")
 		}

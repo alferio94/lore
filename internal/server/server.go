@@ -18,7 +18,7 @@ import (
 	"github.com/alferio94/lore/internal/store"
 )
 
-var loadServerStats = func(s *store.Store) (*store.Stats, error) {
+var loadServerStats = func(s store.Contract) (*store.Stats, error) {
 	return s.Stats()
 }
 
@@ -38,7 +38,7 @@ type SyncStatus struct {
 }
 
 type Server struct {
-	store      *store.Store
+	store      store.Contract
 	mux        *http.ServeMux
 	host       string
 	port       int
@@ -55,11 +55,11 @@ type Config struct {
 	Version string
 }
 
-func New(s *store.Store, port int) *Server {
+func New(s store.Contract, port int) *Server {
 	return NewWithConfig(s, Config{Host: "127.0.0.1", Port: port, Version: "dev"})
 }
 
-func NewWithConfig(s *store.Store, cfg Config) *Server {
+func NewWithConfig(s store.Contract, cfg Config) *Server {
 	host := cfg.Host
 	if host == "" {
 		host = "127.0.0.1"

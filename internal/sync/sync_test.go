@@ -294,7 +294,7 @@ func TestExportErrors(t *testing.T) {
 		s := newTestStore(t)
 		sy := New(s, t.TempDir())
 
-		storeExportData = func(_ *store.Store) (*store.ExportData, error) {
+		storeExportData = func(_ store.Contract) (*store.ExportData, error) {
 			return nil, errors.New("boom export")
 		}
 
@@ -357,7 +357,7 @@ func TestExportErrors(t *testing.T) {
 		seedStoreForSync(t, s)
 		sy := New(s, t.TempDir())
 
-		storeRecordSynced = func(_ *store.Store, _ string) error {
+		storeRecordSynced = func(_ store.Contract, _ string) error {
 			return errors.New("forced record failure")
 		}
 
@@ -514,7 +514,7 @@ func TestImportBranches(t *testing.T) {
 			t.Fatalf("write gzip chunk: %v", err)
 		}
 
-		storeRecordSynced = func(_ *store.Store, _ string) error {
+		storeRecordSynced = func(_ store.Contract, _ string) error {
 			return errors.New("forced import record fail")
 		}
 
