@@ -594,7 +594,7 @@ func TestRESTRoutesUnaffectedAfterMCPMount(t *testing.T) {
 
 func TestHandleStatsReturnsInternalServerErrorOnLoaderError(t *testing.T) {
 	prev := loadServerStats
-	loadServerStats = func(s *store.Store) (*store.Stats, error) {
+	loadServerStats = func(s store.Contract) (*store.Stats, error) {
 		return nil, errors.New("stats unavailable")
 	}
 	t.Cleanup(func() {

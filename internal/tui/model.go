@@ -83,10 +83,20 @@ type setupInstallMsg struct {
 	err    error
 }
 
+type Store interface {
+	Stats() (*store.Stats, error)
+	Search(string, store.SearchOptions) ([]store.SearchResult, error)
+	AllObservations(project, scope string, limit int) ([]store.Observation, error)
+	GetObservation(id int64) (*store.Observation, error)
+	Timeline(observationID int64, before, after int) (*store.TimelineResult, error)
+	AllSessions(project string, limit int) ([]store.SessionSummary, error)
+	SessionObservations(sessionID string, limit int) ([]store.Observation, error)
+}
+
 // ─── Model ───────────────────────────────────────────────────────────────────
 
 type Model struct {
-	store      *store.Store
+	store      Store
 	Version    string
 	Screen     Screen
 	PrevScreen Screen
@@ -140,7 +150,7 @@ type Model struct {
 }
 
 // New creates a new TUI model connected to the given store.
-func New(s *store.Store, version string) Model {
+func New(s Store, version string) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Search memories..."
 	ti.CharLimit = 256
@@ -176,49 +186,49 @@ func checkForUpdate(v string) tea.Cmd {
 	}
 }
 
-func loadStats(s *store.Store) tea.Cmd {
+func loadStats(s Store) tea.Cmd {
 	return func() tea.Msg {
 		stats, err := s.Stats()
 		return statsLoadedMsg{stats: stats, err: err}
 	}
 }
 
-func searchMemories(s *store.Store, query string) tea.Cmd {
+func searchMemories(s Store, query string) tea.Cmd {
 	return func() tea.Msg {
 		results, err := s.Search(query, store.SearchOptions{Limit: 50})
 		return searchResultsMsg{results: results, query: query, err: err}
 	}
 }
 
-func loadRecentObservations(s *store.Store) tea.Cmd {
+func loadRecentObservations(s Store) tea.Cmd {
 	return func() tea.Msg {
 		obs, err := s.AllObservations("", "", 50)
 		return recentObservationsMsg{observations: obs, err: err}
 	}
 }
 
-func loadObservationDetail(s *store.Store, id int64) tea.Cmd {
+func loadObservationDetail(s Store, id int64) tea.Cmd {
 	return func() tea.Msg {
 		obs, err := s.GetObservation(id)
 		return observationDetailMsg{observation: obs, err: err}
 	}
 }
 
-func loadTimeline(s *store.Store, obsID int64) tea.Cmd {
+func loadTimeline(s Store, obsID int64) tea.Cmd {
 	return func() tea.Msg {
 		tl, err := s.Timeline(obsID, 10, 10)
 		return timelineMsg{timeline: tl, err: err}
 	}
 }
 
-func loadRecentSessions(s *store.Store) tea.Cmd {
+func loadRecentSessions(s Store) tea.Cmd {
 	return func() tea.Msg {
 		sessions, err := s.AllSessions("", 50)
 		return recentSessionsMsg{sessions: sessions, err: err}
 	}
 }
 
-func loadSessionObservations(s *store.Store, sessionID string) tea.Cmd {
+func loadSessionObservations(s Store, sessionID string) tea.Cmd {
 	return func() tea.Msg {
 		obs, err := s.SessionObservations(sessionID, 200)
 		return sessionObservationsMsg{observations: obs, err: err}

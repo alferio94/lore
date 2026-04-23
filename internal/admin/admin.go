@@ -18,11 +18,30 @@ import (
 	jwtlib "github.com/golang-jwt/jwt/v5"
 )
 
+type AdminStore interface {
+	ListSkills(params store.ListSkillsParams) ([]store.Skill, error)
+	GetSkill(name string) (*store.Skill, error)
+	CreateSkill(params store.CreateSkillParams) (*store.Skill, error)
+	UpdateSkill(name string, params store.UpdateSkillParams) (*store.Skill, error)
+	DeleteSkill(name, changedBy string) error
+	ListStacks() ([]store.Stack, error)
+	CreateStack(name, displayName string) (*store.Stack, error)
+	DeleteStack(id int64) error
+	ListCategories() ([]store.Category, error)
+	CreateCategory(name, displayName string) (*store.Category, error)
+	DeleteCategory(id int64) error
+	AdminStats() (store.AdminStats, error)
+	ListProjectsWithStats() ([]store.ProjectStats, error)
+	UpsertUser(email, name, avatarURL, provider string) (*store.User, error)
+	ListUsers() ([]store.User, error)
+	UpdateUserRole(id int64, role string) (*store.User, error)
+}
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 // AdminConfig holds all configuration needed by the admin package.
 type AdminConfig struct {
-	Store              *store.Store
+	Store              AdminStore
 	JWTSecret          []byte         // from LORE_JWT_SECRET or auto-generated
 	GoogleClientID     string         // from LORE_GOOGLE_CLIENT_ID
 	GoogleClientSecret string         // from LORE_GOOGLE_CLIENT_SECRET

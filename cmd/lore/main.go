@@ -58,7 +58,10 @@ func init() {
 }
 
 var (
-	storeNew      = store.New
+	// Backend selection ownership lives at runtime composition in cmd/lore.
+	// Commands open storage via store.Open(cfg), which keeps SQLite as the
+	// default active backend unless an explicit backend override is set.
+	storeOpen     = store.Open
 	newHTTPServer = server.NewWithConfig
 	startHTTP     = (*server.Server).Start
 
@@ -73,7 +76,7 @@ var (
 	// detectProject is injectable for testing; wraps project.DetectProject.
 	detectProject = project.DetectProject
 
-	newTUIModel   = func(s *store.Store) tui.Model { return tui.New(s, version) }
+	newTUIModel   = func(s store.Contract) tui.Model { return tui.New(s, version) }
 	newTeaProgram = tea.NewProgram
 	runTeaProgram = (*tea.Program).Run
 
@@ -84,16 +87,16 @@ var (
 	setupAddClaudeCodeAllowlist = setup.AddClaudeCodeAllowlist
 	scanInputLine               = fmt.Scanln
 
-	storeSearch = func(s *store.Store, query string, opts store.SearchOptions) ([]store.SearchResult, error) {
+	storeSearch = func(s store.Contract, query string, opts store.SearchOptions) ([]store.SearchResult, error) {
 		return s.Search(query, opts)
 	}
-	storeAddObservation = func(s *store.Store, p store.AddObservationParams) (int64, error) { return s.AddObservation(p) }
-	storeTimeline       = func(s *store.Store, observationID int64, before, after int) (*store.TimelineResult, error) {
+	storeAddObservation = func(s store.Contract, p store.AddObservationParams) (int64, error) { return s.AddObservation(p) }
+	storeTimeline       = func(s store.Contract, observationID int64, before, after int) (*store.TimelineResult, error) {
 		return s.Timeline(observationID, before, after)
 	}
-	storeFormatContext = func(s *store.Store, project, scope string) (string, error) { return s.FormatContext(project, scope) }
-	storeStats         = func(s *store.Store) (*store.Stats, error) { return s.Stats() }
-	storeExport        = func(s *store.Store) (*store.ExportData, error) { return s.Export() }
+	storeFormatContext = func(s store.Contract, project, scope string) (string, error) { return s.FormatContext(project, scope) }
+	storeStats         = func(s store.Contract) (*store.Stats, error) { return s.Stats() }
+	storeExport        = func(s store.Contract) (*store.ExportData, error) { return s.Export() }
 	jsonMarshalIndent  = json.MarshalIndent
 
 	syncStatus = func(sy *engramsync.Syncer) (localChunks int, remoteChunks int, pendingImport int, err error) {
@@ -213,7 +216,7 @@ func cmdServe(cfg store.Config) {
 		}
 	}
 
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -325,7 +328,7 @@ func cmdMCP(cfg store.Config) {
 	// Always normalize (lowercase + trim)
 	detectedProject, _ = store.NormalizeProject(detectedProject)
 
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -344,7 +347,7 @@ func cmdMCP(cfg store.Config) {
 }
 
 func cmdTUI(cfg store.Config) {
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -402,7 +405,7 @@ func cmdSearch(cfg store.Config) {
 		exitFunc(1)
 	}
 
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 		return
@@ -471,7 +474,7 @@ func cmdSave(cfg store.Config) {
 		}
 	}
 
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -530,7 +533,7 @@ func cmdTimeline(cfg store.Config) {
 		}
 	}
 
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -592,7 +595,7 @@ func cmdContext(cfg store.Config) {
 		}
 	}
 
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -612,7 +615,7 @@ func cmdContext(cfg store.Config) {
 }
 
 func cmdStats(cfg store.Config) {
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -642,7 +645,7 @@ func cmdExport(cfg store.Config) {
 		outFile = os.Args[2]
 	}
 
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -685,7 +688,7 @@ func cmdImport(cfg store.Config) {
 		fatal(fmt.Errorf("parse %s: %w", inFile, err))
 	}
 
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -735,7 +738,7 @@ func cmdSync(cfg store.Config) {
 
 	syncDir := ".lore"
 
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -809,9 +812,9 @@ func cmdSync(cfg store.Config) {
 	fmt.Printf("  git add .lore/ && git commit -m \"sync lore memories\"\n")
 }
 
-// storeAdapter wraps *store.Store to satisfy obsidian.StoreReader.
+// storeAdapter wraps store.Contract to satisfy obsidian.StoreReader.
 // The real store.Stats() returns (*store.Stats, error); the interface expects *store.Stats.
-type storeAdapter struct{ s *store.Store }
+type storeAdapter struct{ s store.Contract }
 
 func (a *storeAdapter) Export() (*store.ExportData, error) { return a.s.Export() }
 func (a *storeAdapter) Stats() *store.Stats {
@@ -942,7 +945,7 @@ func cmdObsidianExport(cfg store.Config) {
 		exportCfg.Since = sinceTime
 	}
 
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -1013,7 +1016,7 @@ func cmdProjects(cfg store.Config) {
 }
 
 func cmdProjectsList(cfg store.Config) {
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -1164,7 +1167,7 @@ func cmdProjectsConsolidate(cfg store.Config) {
 		}
 	}
 
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -1420,7 +1423,7 @@ func cmdProjectsPrune(cfg store.Config) {
 		}
 	}
 
-	s, err := storeNew(cfg)
+	s, err := storeOpen(cfg)
 	if err != nil {
 		fatal(err)
 	}
