@@ -227,6 +227,10 @@ All endpoints return JSON. Server listens on `127.0.0.1:7437`.
 ### Search
 
 - `GET /search` — FTS5 search. Query: `?q=QUERY&type=TYPE&project=PROJECT&scope=SCOPE&limit=N`
+  - Response body remains a JSON array of search results for backward compatibility.
+  - Fallback transparency is exposed via headers:
+    - `X-Lore-Search-Fallback-Used: true|false`
+    - `X-Lore-Search-Fallback-Projects: comma,separated,projects` (empty when not applied)
 
 ### Timeline
 

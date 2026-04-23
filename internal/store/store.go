@@ -16,10 +16,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	projectpkg "github.com/alferio94/lore/internal/project"
 	_ "modernc.org/sqlite"
 )
 
@@ -58,6 +60,16 @@ type Observation struct {
 type SearchResult struct {
 	Observation
 	Rank float64 `json:"rank"`
+}
+
+type SearchMetadata struct {
+	FallbackUsed     bool     `json:"fallback_used"`
+	FallbackProjects []string `json:"fallback_projects"`
+}
+
+type SearchWithMetadataResult struct {
+	Results  []SearchResult `json:"results"`
+	Metadata SearchMetadata `json:"metadata"`
 }
 
 type SessionSummary struct {
@@ -1683,9 +1695,76 @@ func (s *Store) Timeline(observationID int64, before, after int) (*TimelineResul
 	}, nil
 }
 
+const (
+	fallbackCandidateCap         = 3
+	fallbackSimilarityFloor      = 0.60
+	fallbackLevenshteinThreshold = 3
+)
+
 // ─── Search (FTS5) ───────────────────────────────────────────────────────────
 
 func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error) {
+	outcome, err := s.SearchWithMetadata(query, opts)
+	if err != nil {
+		return nil, err
+	}
+	return outcome.Results, nil
+}
+
+func (s *Store) SearchWithMetadata(query string, opts SearchOptions) (*SearchWithMetadataResult, error) {
+	exactResults, err := s.searchExact(query, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	outcome := &SearchWithMetadataResult{Results: exactResults}
+	if opts.Project == "" || len(exactResults) > 0 {
+		return outcome, nil
+	}
+
+	candidates, err := s.selectFallbackProjects(opts.Project)
+	if err != nil {
+		return nil, fmt.Errorf("search fallback candidates: %w", err)
+	}
+	if len(candidates) == 0 {
+		return outcome, nil
+	}
+
+	outcome.Metadata.FallbackUsed = true
+	outcome.Metadata.FallbackProjects = append([]string(nil), candidates...)
+
+	combined := make([]SearchResult, 0, opts.Limit)
+	seen := make(map[int64]bool)
+	for _, candidate := range candidates {
+		fallbackResults, err := s.searchExact(query, SearchOptions{
+			Type:    opts.Type,
+			Project: candidate,
+			Scope:   opts.Scope,
+			Limit:   opts.Limit,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, result := range fallbackResults {
+			if seen[result.ID] {
+				continue
+			}
+			seen[result.ID] = true
+			combined = append(combined, result)
+		}
+		if opts.Limit > 0 && len(combined) >= opts.Limit {
+			break
+		}
+	}
+
+	if opts.Limit > 0 && len(combined) > opts.Limit {
+		combined = combined[:opts.Limit]
+	}
+	outcome.Results = combined
+	return outcome, nil
+}
+
+func (s *Store) searchExact(query string, opts SearchOptions) ([]SearchResult, error) {
 	// Normalize project filter so "Engram" finds records stored as "engram"
 	opts.Project, _ = NormalizeProject(opts.Project)
 
@@ -1807,6 +1886,81 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 		results = results[:limit]
 	}
 	return results, nil
+}
+
+func (s *Store) selectFallbackProjects(project string) ([]string, error) {
+	project, _ = NormalizeProject(project)
+	if project == "" {
+		return nil, nil
+	}
+
+	existingNames, err := s.ListProjectNames()
+	if err != nil {
+		return nil, err
+	}
+
+	matches := projectpkg.FindSimilar(project, existingNames, fallbackLevenshteinThreshold)
+	type scoredMatch struct {
+		name     string
+		score    float64
+		distance int
+	}
+
+	scored := make([]scoredMatch, 0, len(matches))
+	for _, m := range matches {
+		score := similarityScore(project, m)
+		if score < fallbackSimilarityFloor {
+			continue
+		}
+		scored = append(scored, scoredMatch{name: m.Name, score: score, distance: m.Distance})
+	}
+
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score == scored[j].score {
+			if scored[i].distance == scored[j].distance {
+				return scored[i].name < scored[j].name
+			}
+			return scored[i].distance < scored[j].distance
+		}
+		return scored[i].score > scored[j].score
+	})
+
+	if len(scored) > fallbackCandidateCap {
+		scored = scored[:fallbackCandidateCap]
+	}
+
+	results := make([]string, 0, len(scored))
+	for _, match := range scored {
+		results = append(results, match.name)
+	}
+	return results, nil
+}
+
+func similarityScore(query string, match projectpkg.ProjectMatch) float64 {
+	queryRunes := []rune(query)
+	candidateRunes := []rune(match.Name)
+	maxLen := len(queryRunes)
+	if len(candidateRunes) > maxLen {
+		maxLen = len(candidateRunes)
+	}
+	if maxLen == 0 {
+		return 0
+	}
+
+	switch match.MatchType {
+	case "case-insensitive":
+		return 1.0
+	case "substring":
+		shortLen := len(queryRunes)
+		if len(candidateRunes) < shortLen {
+			shortLen = len(candidateRunes)
+		}
+		return float64(shortLen) / float64(maxLen)
+	case "levenshtein":
+		return 1.0 - (float64(match.Distance) / float64(maxLen))
+	default:
+		return 0
+	}
 }
 
 // ─── Stats ───────────────────────────────────────────────────────────────────
