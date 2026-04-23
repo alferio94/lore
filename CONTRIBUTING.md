@@ -194,3 +194,5 @@ This links repo `skills/*` into project-local:
 - `.claude/skills/*`
 - `.codex/skills/*`
 - `.gemini/skills/*`
+
+These are project-local adapter folders. They do **not** imply that global home-directory skills from `~/.claude/skills/` should be used as part of Lore's runtime skill resolution.

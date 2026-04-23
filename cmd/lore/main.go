@@ -68,6 +68,7 @@ var (
 	resolveMCPTools        = mcp.ResolveTools
 	serveMCP               = mcpserver.ServeStdio
 	newMCPHTTPHandler      = mcp.NewHTTPHandler
+	mountAdmin             = admin.Mount
 
 	// detectProject is injectable for testing; wraps project.DetectProject.
 	detectProject = project.DetectProject
@@ -192,12 +193,17 @@ func main() {
 // ─── Commands ────────────────────────────────────────────────────────────────
 
 func cmdServe(cfg store.Config) {
-	runtimeCfg, err := loadRuntimeConfig(cfg, os.Args[2:])
+	runtimeCfg, err := loadRuntimeConfig(os.Args[2:])
 	if err != nil {
 		fatal(err)
 	}
 
-	cfg.DataDir = runtimeCfg.DataDir
+	storageCfg, err := loadStorageConfig(cfg)
+	if err != nil {
+		fatal(err)
+	}
+
+	cfg = storageCfg.Apply(cfg)
 
 	// Allow: lore serve --dev-auth
 	devAuth := false
@@ -268,7 +274,7 @@ func cmdServe(cfg store.Config) {
 
 	// Mount admin routes on the server's mux.
 	mux := srv.Handler().(*http.ServeMux)
-	admin.Mount(mux, adminCfg)
+	mountAdmin(mux, adminCfg)
 	log.Printf("[lore] admin panel: %s/admin/", runtimeCfg.BaseURL)
 	if devAuth {
 		log.Printf("[lore] WARN: --dev-auth is enabled — do NOT use in production")
@@ -1594,7 +1600,7 @@ Usage:
   lore <command> [arguments]
 
 Commands:
-  serve [port]       Start HTTP API server (default: 7437)
+	serve [port]       Start HTTP API server (port precedence: arg > LORE_PORT > PORT > 7437)
   mcp [--tools=PROFILE] [--project=NAME]
                      Start MCP server (stdio transport, for any AI agent)
                        Profiles: agent (11 tools), admin (4 tools), all (default, 15)
@@ -1634,8 +1640,10 @@ Commands:
   help               Show this help
 
 Environment:
-  LORE_DATA_DIR    Override data directory (default: ~/.lore)
-  LORE_PORT        Override HTTP server port (default: 7437)
+  LORE_DATA_DIR    Override SQLite data directory (default: ~/.lore)
+  LORE_PORT        Preferred HTTP server port for serve (default: 7437)
+  PORT             Cloud runtime fallback port when LORE_PORT is unset
+  DATABASE_URL     Forward-compatible storage URL (syntax-validated only; SQLite remains active)
   LORE_PROJECT     Override auto-detected project name for MCP server
 
 MCP Configuration (add to your agent's config):

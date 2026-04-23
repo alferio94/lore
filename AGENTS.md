@@ -7,6 +7,13 @@ Notion Project URL: https://www.notion.so/33e8846684b181999712ef3828bb4b34
 
 When working on this project, load the relevant skill(s) BEFORE writing any code.
 
+## Skill Source Policy
+
+- Use project-local skills first.
+- If a tool-global skill is needed, use the active OpenCode skill set.
+- Do **not** resolve or load global home-directory Claude skills from `~/.claude/skills/` for this project.
+- Project-local `.claude/` folders created by setup are adapter folders, not permission to use global `~/.claude/skills/` as a source of truth.
+
 ## How to Use
 
 1. Check the trigger column to find skills that match your current task

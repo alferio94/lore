@@ -140,7 +140,11 @@ The binary includes SQLite (via [modernc.org/sqlite](https://pkg.go.dev/modernc.
 | Variable | Description | Default |
 |---|---|---|
 | `LORE_DATA_DIR` | Data directory | `~/.lore` (Windows: `%USERPROFILE%\.lore`) |
-| `LORE_PORT` | HTTP server port | `7437` |
+| `LORE_PORT` | Preferred HTTP server port for `lore serve` (highest env precedence) | `7437` |
+| `PORT` | Cloud-host fallback port when `LORE_PORT` is unset | unset |
+| `DATABASE_URL` | Forward-compatible external DB URL (syntax validation only; SQLite remains active) | unset |
+
+Port precedence in `lore serve`: positional argument (`lore serve 9090`) → `LORE_PORT` → `PORT` → `7437`.
 
 ---
 

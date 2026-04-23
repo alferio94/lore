@@ -5,8 +5,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
-	"github.com/alferio94/lore/internal/store"
 )
 
 type RuntimeEnv string
@@ -24,7 +22,6 @@ type RuntimeConfig struct {
 	BaseURL      string
 	JWTSecret    string
 	CookieSecure bool
-	DataDir      string
 
 	GoogleClientID     string
 	GoogleClientSecret string
@@ -32,7 +29,7 @@ type RuntimeConfig struct {
 	GitHubClientSecret string
 }
 
-func loadRuntimeConfig(cfg store.Config, args []string) (RuntimeConfig, error) {
+func loadRuntimeConfig(args []string) (RuntimeConfig, error) {
 	envRaw := strings.TrimSpace(os.Getenv("LORE_ENV"))
 	env := RuntimeEnvLocal
 	switch envRaw {
@@ -44,20 +41,7 @@ func loadRuntimeConfig(cfg store.Config, args []string) (RuntimeConfig, error) {
 		return RuntimeConfig{}, fmt.Errorf("lore config: invalid LORE_ENV %q (allowed: local, staging)", envRaw)
 	}
 
-	port := 7437
-	if p := strings.TrimSpace(os.Getenv("LORE_PORT")); p != "" {
-		if n, err := strconv.Atoi(p); err == nil {
-			port = n
-		}
-	}
-	for _, arg := range args {
-		if arg == "--dev-auth" {
-			continue
-		}
-		if n, err := strconv.Atoi(arg); err == nil {
-			port = n
-		}
-	}
+	port := resolveServePort(args)
 
 	host := strings.TrimSpace(os.Getenv("LORE_HOST"))
 	if host == "" {
@@ -90,11 +74,6 @@ func loadRuntimeConfig(cfg store.Config, args []string) (RuntimeConfig, error) {
 		return RuntimeConfig{}, fmt.Errorf("lore config: LORE_JWT_SECRET is required when LORE_ENV=staging")
 	}
 
-	dataDir := cfg.DataDir
-	if dir := strings.TrimSpace(os.Getenv("LORE_DATA_DIR")); dir != "" {
-		dataDir = dir
-	}
-
 	return RuntimeConfig{
 		Env:                env,
 		Host:               host,
@@ -102,10 +81,51 @@ func loadRuntimeConfig(cfg store.Config, args []string) (RuntimeConfig, error) {
 		BaseURL:            baseURL,
 		JWTSecret:          jwtSecret,
 		CookieSecure:       cookieSecure,
-		DataDir:            dataDir,
 		GoogleClientID:     os.Getenv("LORE_GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("LORE_GOOGLE_CLIENT_SECRET"),
 		GitHubClientID:     os.Getenv("LORE_GITHUB_CLIENT_ID"),
 		GitHubClientSecret: os.Getenv("LORE_GITHUB_CLIENT_SECRET"),
 	}, nil
+}
+
+func resolveServePort(args []string) int {
+	if argPort, ok := parsePositionalPortArg(args); ok {
+		return argPort
+	}
+
+	if lorePort, ok := parsePortEnv("LORE_PORT"); ok {
+		return lorePort
+	}
+
+	if port, ok := parsePortEnv("PORT"); ok {
+		return port
+	}
+
+	return 7437
+}
+
+func parsePositionalPortArg(args []string) (int, bool) {
+	for _, arg := range args {
+		if arg == "--dev-auth" {
+			continue
+		}
+		n, err := strconv.Atoi(arg)
+		if err != nil {
+			continue
+		}
+		return n, true
+	}
+	return 0, false
+}
+
+func parsePortEnv(key string) (int, bool) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }

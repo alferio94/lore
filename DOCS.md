@@ -87,7 +87,7 @@ lore/
 ## CLI Commands
 
 ```
-lore serve [port]       Start HTTP API server (default: 7437)
+lore serve [port]       Start HTTP API server (port precedence: arg > LORE_PORT > PORT > 7437)
 lore mcp                Start MCP server (stdio transport)
 lore tui                Launch interactive terminal UI
 lore search <query>     Search memories [--type TYPE] [--project PROJECT] [--scope SCOPE] [--limit N]
@@ -110,7 +110,9 @@ lore help               Show help
 | Variable | Description | Default |
 |---|---|---|
 | `LORE_DATA_DIR` | Override data directory | `~/.lore` |
-| `LORE_PORT` | Override HTTP server port | `7437` |
+| `LORE_PORT` | Preferred HTTP server port for `lore serve` | `7437` |
+| `PORT` | Cloud-host fallback port when `LORE_PORT` is unset | unset |
+| `DATABASE_URL` | Forward-compatible storage input (syntax-validated only; SQLite stays active) | unset |
 | `LORE_PROJECT` | Override project name for MCP server | auto-detected via git |
 
 ---
@@ -204,7 +206,7 @@ The TUI uses dedicated store methods that don't filter by session status (unlike
 
 ## HTTP API Endpoints
 
-All endpoints return JSON. Server listens on `127.0.0.1:7437`.
+All endpoints return JSON. `lore serve` listens using runtime config (`[port]` arg → `LORE_PORT` → `PORT` → `7437`) and host defaults (`127.0.0.1` local, `0.0.0.0` staging).
 
 ### Health
 

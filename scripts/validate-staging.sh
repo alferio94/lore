@@ -26,7 +26,7 @@ fi
 
 if ! command -v docker >/dev/null 2>&1; then
   printf '%s\n' "WARN: docker binary not found; skipping compose validation." >&2
-  printf '%s\n' "Staging artifact checks passed (compose syntax not validated)."
+  printf '%s\n' "Runtime/deployment artifact checks passed (compose syntax not validated)."
   exit 0
 fi
 
@@ -51,4 +51,4 @@ if ! docker compose -f "$COMPOSE_FILE" config --quiet; then
   fail "docker compose config validation failed for docker-compose.staging.yml"
 fi
 
-printf '%s\n' "Staging artifact checks passed."
+printf '%s\n' "Runtime/deployment artifact checks passed."

@@ -57,11 +57,11 @@ func TestDockerStagingRequiredFilesExist(t *testing.T) {
 	}
 }
 
-func TestEnvExampleContainsRequiredStagingVariables(t *testing.T) {
+func TestEnvExampleContainsRuntimeAndStorageVariables(t *testing.T) {
 	root := repoRootFromCwd(t)
 	content := mustReadFile(t, filepath.Join(root, ".env.example"))
 
-	requiredVars := []string{"LORE_ENV", "LORE_BASE_URL", "LORE_JWT_SECRET"}
+	requiredVars := []string{"LORE_ENV", "LORE_BASE_URL", "LORE_JWT_SECRET", "LORE_PORT", "PORT", "DATABASE_URL"}
 	for _, requiredVar := range requiredVars {
 		requiredVar := requiredVar
 		t.Run(requiredVar, func(t *testing.T) {
@@ -69,6 +69,26 @@ func TestEnvExampleContainsRequiredStagingVariables(t *testing.T) {
 				t.Fatalf(".env.example must include %s", requiredVar)
 			}
 		})
+	}
+}
+
+func TestRuntimeDocsDescribePortPrecedenceAndSQLiteBehavior(t *testing.T) {
+	root := repoRootFromCwd(t)
+
+	installation := mustReadFile(t, filepath.Join(root, "docs", "INSTALLATION.md"))
+	if !strings.Contains(installation, "LORE_PORT") || !strings.Contains(installation, "PORT") {
+		t.Fatalf("docs/INSTALLATION.md must describe LORE_PORT and PORT runtime inputs")
+	}
+	if !strings.Contains(installation, "DATABASE_URL") {
+		t.Fatalf("docs/INSTALLATION.md must mention DATABASE_URL acceptance")
+	}
+
+	docs := mustReadFile(t, filepath.Join(root, "DOCS.md"))
+	if !strings.Contains(docs, "LORE_PORT") || !strings.Contains(docs, "PORT") {
+		t.Fatalf("DOCS.md must describe serve port precedence")
+	}
+	if !strings.Contains(docs, "SQLite") {
+		t.Fatalf("DOCS.md must preserve SQLite runtime guidance")
 	}
 }
 

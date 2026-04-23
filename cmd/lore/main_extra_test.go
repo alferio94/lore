@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alferio94/lore/internal/admin"
 	"github.com/alferio94/lore/internal/mcp"
 	engramsrv "github.com/alferio94/lore/internal/server"
 	"github.com/alferio94/lore/internal/setup"
@@ -101,6 +102,7 @@ func stubRuntimeHooks(t *testing.T) {
 	oldSyncImport := syncImport
 	oldSyncExport := syncExport
 	oldCheckForUpdates := checkForUpdates
+	oldMountAdmin := mountAdmin
 
 	storeNew = store.New
 	newHTTPServer = func(s *store.Store, cfg engramsrv.Config) *engramsrv.Server { return engramsrv.NewWithConfig(s, cfg) }
@@ -143,6 +145,7 @@ func stubRuntimeHooks(t *testing.T) {
 	checkForUpdates = func(string) versioncheck.CheckResult {
 		return versioncheck.CheckResult{Status: versioncheck.StatusUpToDate}
 	}
+	mountAdmin = admin.Mount
 
 	t.Cleanup(func() {
 		storeNew = oldStoreNew
@@ -168,6 +171,7 @@ func stubRuntimeHooks(t *testing.T) {
 		syncImport = oldSyncImport
 		syncExport = oldSyncExport
 		checkForUpdates = oldCheckForUpdates
+		mountAdmin = oldMountAdmin
 	})
 }
 
@@ -192,27 +196,35 @@ func TestCmdServeParsesPortAndErrors(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		envPort   string
+		lorePort  string
+		portEnv   string
 		argPort   string
 		wantPort  int
 		startErr  error
 		wantFatal bool
 	}{
 		{name: "default port", wantPort: 7437},
-		{name: "env port", envPort: "8123", wantPort: 8123},
-		{name: "arg overrides env", envPort: "8123", argPort: "9001", wantPort: 9001},
-		{name: "invalid env keeps default", envPort: "nope", wantPort: 7437},
-		{name: "invalid arg keeps env", envPort: "8123", argPort: "bad", wantPort: 8123},
+		{name: "PORT fallback", portEnv: "7000", wantPort: 7000},
+		{name: "LORE_PORT takes precedence over PORT", lorePort: "8123", portEnv: "7000", wantPort: 8123},
+		{name: "arg overrides env", lorePort: "8123", portEnv: "7000", argPort: "9001", wantPort: 9001},
+		{name: "invalid LORE_PORT falls back to PORT", lorePort: "nope", portEnv: "7000", wantPort: 7000},
+		{name: "invalid arg keeps env", lorePort: "8123", argPort: "bad", wantPort: 8123},
+		{name: "invalid env keeps default", lorePort: "nope", portEnv: "also-bad", wantPort: 7437},
 		{name: "start failure", wantPort: 7437, startErr: errors.New("listen failed"), wantFatal: true},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			stubExitWithPanic(t)
-			if tc.envPort != "" {
-				t.Setenv("LORE_PORT", tc.envPort)
+			if tc.lorePort != "" {
+				t.Setenv("LORE_PORT", tc.lorePort)
 			} else {
 				t.Setenv("LORE_PORT", "")
+			}
+			if tc.portEnv != "" {
+				t.Setenv("PORT", tc.portEnv)
+			} else {
+				t.Setenv("PORT", "")
 			}
 
 			args := []string{"lore", "serve"}
@@ -1014,6 +1026,96 @@ func TestCmdServeUsesProjectHintFromEnv(t *testing.T) {
 
 	if capturedHint != "my-env-project" {
 		t.Fatalf("expected projectHint=%q, got %q", "my-env-project", capturedHint)
+	}
+}
+
+// TestCmdServeRuntimeContractIntegrationLike verifies runtime/storage wiring
+// together with mounted HTTP contracts in one end-to-end-ish cmdServe pass.
+func TestCmdServeRuntimeContractIntegrationLike(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+
+	storageDir := t.TempDir()
+	t.Setenv("LORE_ENV", "local")
+	t.Setenv("LORE_HOST", "127.0.0.1")
+	t.Setenv("LORE_PORT", "")
+	t.Setenv("PORT", "7666")
+	t.Setenv("LORE_DATA_DIR", storageDir)
+	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
+	t.Setenv("LORE_PROJECT", "Runtime-Project")
+	withArgs(t, "lore", "serve", "--dev-auth")
+
+	seenStoreDataDir := ""
+	seenStoreDatabaseURL := ""
+	seenServerHost := ""
+	seenServerPort := 0
+	seenProjectHint := ""
+	adminMounted := false
+
+	storeNew = func(in store.Config) (*store.Store, error) {
+		seenStoreDataDir = in.DataDir
+		seenStoreDatabaseURL = in.DatabaseURL
+		return store.New(in)
+	}
+	newHTTPServer = func(s *store.Store, cfg engramsrv.Config) *engramsrv.Server {
+		seenServerHost = cfg.Host
+		seenServerPort = cfg.Port
+		return engramsrv.NewWithConfig(s, cfg)
+	}
+	newMCPHTTPHandler = func(_ *store.Store, projectHint string) http.Handler {
+		seenProjectHint = projectHint
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
+	mountAdmin = func(mux *http.ServeMux, cfg admin.AdminConfig) {
+		adminMounted = true
+		if !cfg.DevAuth {
+			t.Fatalf("expected DevAuth=true when --dev-auth flag is present")
+		}
+		admin.Mount(mux, cfg)
+	}
+
+	startHTTP = func(srv *engramsrv.Server) error {
+		mcpReq := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		mcpRec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(mcpRec, mcpReq)
+		if mcpRec.Code == http.StatusNotFound {
+			return fmt.Errorf("expected /mcp route to be mounted")
+		}
+
+		adminReq := httptest.NewRequest(http.MethodGet, "/admin/", nil)
+		adminRec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(adminRec, adminReq)
+		if adminRec.Code == http.StatusNotFound {
+			return fmt.Errorf("expected /admin route to be mounted")
+		}
+
+		return nil
+	}
+
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdServe(cfg) })
+	if recovered != nil {
+		t.Fatalf("expected clean cmdServe run, got panic=%v stderr=%q", recovered, stderr)
+	}
+
+	if seenServerHost != "127.0.0.1" {
+		t.Fatalf("server host = %q, want 127.0.0.1", seenServerHost)
+	}
+	if seenServerPort != 7666 {
+		t.Fatalf("server port = %d, want 7666 from PORT fallback", seenServerPort)
+	}
+	if seenStoreDataDir != storageDir {
+		t.Fatalf("store DataDir = %q, want %q", seenStoreDataDir, storageDir)
+	}
+	if seenStoreDatabaseURL == "" {
+		t.Fatalf("expected store config to retain DATABASE_URL")
+	}
+	if seenProjectHint != "runtime-project" {
+		t.Fatalf("project hint = %q, want normalized runtime-project", seenProjectHint)
+	}
+	if !adminMounted {
+		t.Fatalf("expected admin routes to be mounted")
 	}
 }
 
