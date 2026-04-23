@@ -320,6 +320,12 @@ func TestHandleSearchAndCRUDHandlers(t *testing.T) {
 	if !strings.Contains(callResultText(t, searchRes), "Found 1 memories") {
 		t.Fatalf("expected non-empty search result")
 	}
+	if !strings.Contains(callResultText(t, searchRes), "fallback_used=false") {
+		t.Fatalf("expected exact-path fallback metadata in search output")
+	}
+	if !strings.Contains(callResultText(t, searchRes), "fallback_projects=[]") {
+		t.Fatalf("expected empty fallback projects metadata in search output")
+	}
 
 	update := handleUpdate(s)
 	updateReq := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
@@ -546,6 +552,49 @@ func TestMCPHandlersErrorBranches(t *testing.T) {
 	}
 	if !getNotFoundRes.IsError {
 		t.Fatalf("expected get observation not found to return tool error")
+	}
+}
+
+func TestHandleSearchIncludesFallbackMetadataWhenUsed(t *testing.T) {
+	s := newMCPTestStore(t)
+	if err := s.CreateSession("s-fallback", "lore-core", "/tmp/lore"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	_, err := s.AddObservation(store.AddObservationParams{
+		SessionID: "s-fallback",
+		Type:      "decision",
+		Title:     "Fallback candidate",
+		Content:   "fallback metadata mcp keyword",
+		Project:   "lore-core",
+		Scope:     "project",
+	})
+	if err != nil {
+		t.Fatalf("add observation: %v", err)
+	}
+
+	h := handleSearch(s, MCPConfig{})
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"query":   "metadata",
+		"project": "lore-c0re",
+		"scope":   "project",
+		"limit":   5.0,
+	}}}
+
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("search handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected search error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	if !strings.Contains(text, "fallback_used=true") {
+		t.Fatalf("expected fallback_used=true in output, got: %s", text)
+	}
+	if !strings.Contains(text, "fallback_projects=[lore-core]") {
+		t.Fatalf("expected fallback_projects in output, got: %s", text)
 	}
 }
 

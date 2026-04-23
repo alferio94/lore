@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/alferio94/lore/internal/store"
@@ -301,7 +302,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results, err := s.store.Search(query, store.SearchOptions{
+	search, err := s.store.SearchWithMetadata(query, store.SearchOptions{
 		Type:    r.URL.Query().Get("type"),
 		Project: r.URL.Query().Get("project"),
 		Scope:   r.URL.Query().Get("scope"),
@@ -312,7 +313,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonResponse(w, http.StatusOK, results)
+	w.Header().Set("X-Lore-Search-Fallback-Used", strconv.FormatBool(search.Metadata.FallbackUsed))
+	w.Header().Set("X-Lore-Search-Fallback-Projects", strings.Join(search.Metadata.FallbackProjects, ","))
+
+	jsonResponse(w, http.StatusOK, search.Results)
+	return
 }
 
 func (s *Server) handleGetObservation(w http.ResponseWriter, r *http.Request) {

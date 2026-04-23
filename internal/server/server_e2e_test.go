@@ -918,3 +918,63 @@ func TestStoreClosedExtraServerBranchesE2E(t *testing.T) {
 	}
 	exportResp.Body.Close()
 }
+
+func TestSearchFallbackMetadataHeadersE2E(t *testing.T) {
+	_, ts := newE2EServer(t)
+	client := ts.Client()
+
+	createSessionResp := postJSON(t, client, ts.URL+"/sessions", map[string]any{
+		"id":      "s-fallback-meta",
+		"project": "lore-core",
+	})
+	if createSessionResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 creating session, got %d", createSessionResp.StatusCode)
+	}
+	createSessionResp.Body.Close()
+
+	obsResp := postJSON(t, client, ts.URL+"/observations", map[string]any{
+		"session_id": "s-fallback-meta",
+		"type":       "decision",
+		"title":      "fallback metadata",
+		"content":    "fallback metadata keyword",
+		"project":    "lore-core",
+		"scope":      "project",
+	})
+	if obsResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 adding observation, got %d", obsResp.StatusCode)
+	}
+	obsResp.Body.Close()
+
+	exactResp, err := client.Get(ts.URL + "/search?q=metadata&project=lore-core&limit=10")
+	if err != nil {
+		t.Fatalf("exact search request: %v", err)
+	}
+	if exactResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 exact search, got %d", exactResp.StatusCode)
+	}
+	if got := exactResp.Header.Get("X-Lore-Search-Fallback-Used"); got != "false" {
+		t.Fatalf("expected fallback_used=false on exact path, got %q", got)
+	}
+	if got := exactResp.Header.Get("X-Lore-Search-Fallback-Projects"); got != "" {
+		t.Fatalf("expected empty fallback projects on exact path, got %q", got)
+	}
+	_ = decodeJSON[[]map[string]any](t, exactResp)
+
+	fallbackResp, err := client.Get(ts.URL + "/search?q=metadata&project=lore-c0re&limit=10")
+	if err != nil {
+		t.Fatalf("fallback search request: %v", err)
+	}
+	if fallbackResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 fallback search, got %d", fallbackResp.StatusCode)
+	}
+	if got := fallbackResp.Header.Get("X-Lore-Search-Fallback-Used"); got != "true" {
+		t.Fatalf("expected fallback_used=true on fallback path, got %q", got)
+	}
+	if got := fallbackResp.Header.Get("X-Lore-Search-Fallback-Projects"); got != "lore-core" {
+		t.Fatalf("expected fallback projects header lore-core, got %q", got)
+	}
+	results := decodeJSON[[]map[string]any](t, fallbackResp)
+	if len(results) != 1 {
+		t.Fatalf("expected one fallback search result, got %d", len(results))
+	}
+}

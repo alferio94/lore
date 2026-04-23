@@ -706,7 +706,7 @@ func handleSearch(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		// Normalize project name
 		project, _ = store.NormalizeProject(project)
 
-		results, err := s.Search(query, store.SearchOptions{
+		search, err := s.SearchWithMetadata(query, store.SearchOptions{
 			Type:    typ,
 			Project: project,
 			Scope:   scope,
@@ -715,9 +715,18 @@ func handleSearch(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Search error: %s. Try simpler keywords.", err)), nil
 		}
+		results := search.Results
+
+		fallbackProjects := strings.Join(search.Metadata.FallbackProjects, ",")
+		if fallbackProjects == "" {
+			fallbackProjects = "[]"
+		} else {
+			fallbackProjects = "[" + fallbackProjects + "]"
+		}
+		fallbackLine := fmt.Sprintf("fallback_used=%t\nfallback_projects=%s", search.Metadata.FallbackUsed, fallbackProjects)
 
 		if len(results) == 0 {
-			return mcp.NewToolResultText(fmt.Sprintf("No memories found for: %q", query)), nil
+			return mcp.NewToolResultText(fmt.Sprintf("No memories found for: %q\n%s", query, fallbackLine)), nil
 		}
 
 		var b strings.Builder
@@ -741,6 +750,7 @@ func handleSearch(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 		if anyTruncated {
 			fmt.Fprintf(&b, "---\nResults above are previews (300 chars). To read the full content of a specific memory, call lore_get_observation(id: <ID>).\n")
 		}
+		fmt.Fprintf(&b, "\n%s", fallbackLine)
 
 		return mcp.NewToolResultText(b.String()), nil
 	}

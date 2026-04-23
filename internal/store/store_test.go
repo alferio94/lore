@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	projectpkg "github.com/alferio94/lore/internal/project"
 	_ "modernc.org/sqlite"
 )
 
@@ -4132,6 +4134,303 @@ func TestSearchNormalizesProjectFilter(t *testing.T) {
 
 	if len(results) == 0 {
 		t.Fatalf("expected ≥1 result when searching with normalized project filter, got 0")
+	}
+}
+
+func TestSearchWithMetadataExactProjectHitSkipsFallback(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s-exact", "lore", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := s.CreateSession("s-other", "lorex", "/tmp"); err != nil {
+		t.Fatalf("create session other: %v", err)
+	}
+
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID: "s-exact",
+		Type:      "decision",
+		Title:     "Exact hit",
+		Content:   "project fallback exact test keyword",
+		Project:   "lore",
+		Scope:     "project",
+	})
+	if err != nil {
+		t.Fatalf("add exact observation: %v", err)
+	}
+
+	_, err = s.AddObservation(AddObservationParams{
+		SessionID: "s-other",
+		Type:      "decision",
+		Title:     "Other project hit",
+		Content:   "project fallback exact test keyword",
+		Project:   "lorex",
+		Scope:     "project",
+	})
+	if err != nil {
+		t.Fatalf("add other observation: %v", err)
+	}
+
+	outcome, err := s.SearchWithMetadata("fallback exact", SearchOptions{Project: "lore", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchWithMetadata: %v", err)
+	}
+
+	if outcome.Metadata.FallbackUsed {
+		t.Fatalf("expected fallback_used=false when exact hits exist")
+	}
+	if len(outcome.Metadata.FallbackProjects) != 0 {
+		t.Fatalf("expected empty fallback projects on exact hit path, got %v", outcome.Metadata.FallbackProjects)
+	}
+	if len(outcome.Results) != 1 {
+		t.Fatalf("expected 1 exact result, got %d", len(outcome.Results))
+	}
+	if outcome.Results[0].Project == nil || *outcome.Results[0].Project != "lore" {
+		t.Fatalf("expected exact project lore result, got %+v", outcome.Results[0].Project)
+	}
+}
+
+func TestSearchWithMetadataFallsBackWhenExactMisses(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s-fallback", "lore-core", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	_, err := s.AddObservation(AddObservationParams{
+		SessionID: "s-fallback",
+		Type:      "decision",
+		Title:     "Fallback hit",
+		Content:   "bounded fallback search hit",
+		Project:   "lore-core",
+		Scope:     "project",
+	})
+	if err != nil {
+		t.Fatalf("add fallback observation: %v", err)
+	}
+
+	outcome, err := s.SearchWithMetadata("bounded fallback", SearchOptions{Project: "lore-c0re", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchWithMetadata: %v", err)
+	}
+
+	if !outcome.Metadata.FallbackUsed {
+		t.Fatalf("expected fallback_used=true when exact project misses and fallback candidates exist")
+	}
+	if len(outcome.Metadata.FallbackProjects) == 0 || outcome.Metadata.FallbackProjects[0] != "lore-core" {
+		t.Fatalf("expected fallback projects to include lore-core, got %v", outcome.Metadata.FallbackProjects)
+	}
+	if len(outcome.Results) != 1 {
+		t.Fatalf("expected 1 fallback result, got %d", len(outcome.Results))
+	}
+	if outcome.Results[0].Project == nil || *outcome.Results[0].Project != "lore-core" {
+		t.Fatalf("expected fallback result from lore-core, got %+v", outcome.Results[0].Project)
+	}
+}
+
+func TestSearchWithMetadataReturnsCandidateSelectionError(t *testing.T) {
+	s := newTestStore(t)
+
+	originalQueryIt := s.hooks.queryIt
+	s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+		if strings.Contains(query, "SELECT DISTINCT project FROM observations") {
+			return nil, errors.New("forced fallback candidate failure")
+		}
+		return originalQueryIt(db, query, args...)
+	}
+
+	_, err := s.SearchWithMetadata("missing fallback candidate", SearchOptions{Project: "lore-c0re", Limit: 10})
+	if err == nil || !strings.Contains(err.Error(), "search fallback candidates: forced fallback candidate failure") {
+		t.Fatalf("expected fallback candidate selection error, got %v", err)
+	}
+}
+
+func TestSearchWithMetadataReturnsFallbackSearchError(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s-fallback-error", "lore-core", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := s.AddObservation(AddObservationParams{
+		SessionID: "s-fallback-error",
+		Type:      "decision",
+		Title:     "Fallback hit",
+		Content:   "fallback error path hit",
+		Project:   "lore-core",
+		Scope:     "project",
+	}); err != nil {
+		t.Fatalf("seed fallback observation: %v", err)
+	}
+
+	originalQueryIt := s.hooks.queryIt
+	ftsCalls := 0
+	s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+		if strings.Contains(query, "FROM observations_fts") {
+			ftsCalls++
+			if ftsCalls == 2 {
+				return nil, errors.New("forced fallback search failure")
+			}
+		}
+		return originalQueryIt(db, query, args...)
+	}
+
+	_, err := s.SearchWithMetadata("fallback error path", SearchOptions{Project: "lore-c0re", Limit: 10})
+	if err == nil || !strings.Contains(err.Error(), "forced fallback search failure") {
+		t.Fatalf("expected fallback search error, got %v", err)
+	}
+}
+
+func TestSearchWithMetadataFallbackHonorsLimit(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s-fallback-limit", "lore-core", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := s.AddObservation(AddObservationParams{
+			SessionID: "s-fallback-limit",
+			Type:      "decision",
+			Title:     fmt.Sprintf("Fallback hit %d", i),
+			Content:   "fallback limit path hit",
+			Project:   "lore-core",
+			Scope:     "project",
+		}); err != nil {
+			t.Fatalf("seed fallback observation %d: %v", i, err)
+		}
+	}
+
+	outcome, err := s.SearchWithMetadata("fallback limit path", SearchOptions{Project: "lore-c0re", Limit: 1})
+	if err != nil {
+		t.Fatalf("SearchWithMetadata: %v", err)
+	}
+
+	if !outcome.Metadata.FallbackUsed {
+		t.Fatalf("expected fallback path to be used")
+	}
+	if len(outcome.Results) != 1 {
+		t.Fatalf("expected fallback results to honor limit=1, got %d", len(outcome.Results))
+	}
+}
+
+func TestSearchWithMetadataNoCandidatesKeepsEmpty(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s-none", "alpha", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := s.AddObservation(AddObservationParams{
+		SessionID: "s-none",
+		Type:      "decision",
+		Title:     "Unrelated",
+		Content:   "query unrelated content",
+		Project:   "alpha",
+		Scope:     "project",
+	}); err != nil {
+		t.Fatalf("seed observation: %v", err)
+	}
+
+	outcome, err := s.SearchWithMetadata("nonexistent-query-term", SearchOptions{Project: "zzzzzzzz", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchWithMetadata: %v", err)
+	}
+
+	if outcome.Metadata.FallbackUsed {
+		t.Fatalf("expected fallback_used=false when no fallback candidates are available")
+	}
+	if len(outcome.Metadata.FallbackProjects) != 0 {
+		t.Fatalf("expected no fallback projects, got %v", outcome.Metadata.FallbackProjects)
+	}
+	if len(outcome.Results) != 0 {
+		t.Fatalf("expected zero results, got %d", len(outcome.Results))
+	}
+}
+
+func TestSelectFallbackProjectsAppliesCapAndFloor(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("s-cap", "abcde", "/tmp"); err != nil {
+		t.Fatalf("create session abcde: %v", err)
+	}
+	if err := s.CreateSession("s-cap-2", "abcdf", "/tmp"); err != nil {
+		t.Fatalf("create session abcdf: %v", err)
+	}
+	if err := s.CreateSession("s-cap-3", "abxde", "/tmp"); err != nil {
+		t.Fatalf("create session abxde: %v", err)
+	}
+	if err := s.CreateSession("s-cap-4", "xbcde", "/tmp"); err != nil {
+		t.Fatalf("create session xbcde: %v", err)
+	}
+	if err := s.CreateSession("s-floor", "abcde-super-long-project-name", "/tmp"); err != nil {
+		t.Fatalf("create session floor candidate: %v", err)
+	}
+
+	for i, project := range []string{"abcde", "abcdf", "abxde", "xbcde", "abcde-super-long-project-name"} {
+		if _, err := s.AddObservation(AddObservationParams{
+			SessionID: "s-cap",
+			Type:      "decision",
+			Title:     fmt.Sprintf("seed %d", i),
+			Content:   fmt.Sprintf("seed content %d", i),
+			Project:   project,
+			Scope:     "project",
+		}); err != nil {
+			t.Fatalf("seed observation for %s: %v", project, err)
+		}
+	}
+
+	candidates, err := s.selectFallbackProjects("abcde")
+	if err != nil {
+		t.Fatalf("selectFallbackProjects: %v", err)
+	}
+
+	if len(candidates) > 3 {
+		t.Fatalf("expected fallback candidates capped at 3, got %d (%v)", len(candidates), candidates)
+	}
+	for _, candidate := range candidates {
+		if candidate == "abcde-super-long-project-name" {
+			t.Fatalf("expected low-similarity floor candidate to be excluded, got %v", candidates)
+		}
+	}
+}
+
+func TestSelectFallbackProjectsHandlesEmptyProjectAndListErrors(t *testing.T) {
+	s := newTestStore(t)
+
+	candidates, err := s.selectFallbackProjects("")
+	if err != nil {
+		t.Fatalf("selectFallbackProjects empty project: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("expected no candidates for empty project, got %v", candidates)
+	}
+
+	originalQueryIt := s.hooks.queryIt
+	s.hooks.queryIt = func(db queryer, query string, args ...any) (rowScanner, error) {
+		return nil, errors.New("forced project listing failure")
+	}
+
+	_, err = s.selectFallbackProjects("lore")
+	if err == nil || !strings.Contains(err.Error(), "forced project listing failure") {
+		t.Fatalf("expected project listing error, got %v", err)
+	}
+
+	s.hooks.queryIt = originalQueryIt
+}
+
+func TestSimilarityScoreFallbackBranches(t *testing.T) {
+	if got := similarityScore("", projectpkg.ProjectMatch{Name: "", MatchType: "substring"}); got != 0 {
+		t.Fatalf("expected zero score for empty inputs, got %v", got)
+	}
+
+	if got := similarityScore("Lore", projectpkg.ProjectMatch{Name: "lore", MatchType: "case-insensitive"}); got != 1 {
+		t.Fatalf("expected case-insensitive match to score 1, got %v", got)
+	}
+
+	if got := similarityScore("abcd", projectpkg.ProjectMatch{Name: "ab", MatchType: "substring"}); got != 0.5 {
+		t.Fatalf("expected shorter substring score 0.5, got %v", got)
+	}
+
+	if got := similarityScore("abcd", projectpkg.ProjectMatch{Name: "abce", MatchType: "unexpected"}); got != 0 {
+		t.Fatalf("expected unknown match type to score 0, got %v", got)
 	}
 }
 

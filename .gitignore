@@ -9,6 +9,10 @@
 
 # Export files
 lore-export.json
+coverage.out
+coverage-*.out
+test-report.json
+test-report-*.json
 
 # OS
 .DS_Store
@@ -36,3 +40,9 @@ internal/admin/admin_dist/*.css
 internal/admin/admin_dist/*.map
 internal/admin/admin_dist/media/
 internal/admin/admin_dist/3rdpartylicenses.txt
+
+# Local design and skill workbench files
+skills/lore-skill-creator/SKILL.md
+internal/admin/admin_dist/favicon.ico
+lore.pen
+skills/react-clean-architecture/
