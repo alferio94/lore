@@ -1,6 +1,9 @@
 package store
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // Contract is the backend-neutral store boundary consumed by the entrypoints.
 // SQLite remains the only implementation today, but callers should depend on
@@ -60,11 +63,21 @@ type Contract interface {
 func Open(cfg Config) (Contract, error) {
 	switch cfg.SelectedBackend() {
 	case BackendSQLite:
-		return New(cfg)
+		return openSQLiteStore(cfg)
+	case BackendPostgreSQL:
+		pg, err := newPostgresStore(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return pg, nil
 	default:
 		return nil, ErrUnsupportedBackend{Backend: cfg.SelectedBackend()}
 	}
 }
+
+var (
+	openSQLiteStore = func(cfg Config) (Contract, error) { return New(cfg) }
+)
 
 type ErrUnsupportedBackend struct {
 	Backend Backend
@@ -72,4 +85,17 @@ type ErrUnsupportedBackend struct {
 
 func (e ErrUnsupportedBackend) Error() string {
 	return "lore: unsupported store backend " + string(e.Backend)
+}
+
+type ErrUnsupportedBackendFeature struct {
+	Backend Backend
+	Feature string
+}
+
+func (e ErrUnsupportedBackendFeature) Error() string {
+	feature := e.Feature
+	if feature == "" {
+		feature = "requested feature"
+	}
+	return fmt.Sprintf("lore: backend %s does not support %s in this slice", e.Backend, feature)
 }

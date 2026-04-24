@@ -52,6 +52,10 @@ func withCwd(t *testing.T, dir string) {
 	})
 }
 
+type noopStore struct{ store.Contract }
+
+func (noopStore) Close() error { return nil }
+
 func stubCheckForUpdates(t *testing.T, result versioncheck.CheckResult) {
 	t.Helper()
 	old := checkForUpdates
@@ -309,6 +313,9 @@ func TestLoadStorageConfigDefaultsToStoreConfig(t *testing.T) {
 	if storageCfg.DatabaseURL != "" {
 		t.Fatalf("DatabaseURL = %q, want empty", storageCfg.DatabaseURL)
 	}
+	if storageCfg.Backend != store.BackendSQLite {
+		t.Fatalf("Backend = %q, want %q", storageCfg.Backend, store.BackendSQLite)
+	}
 }
 
 func TestLoadStorageConfigReadsOverridesAndValidatesDatabaseURL(t *testing.T) {
@@ -329,6 +336,9 @@ func TestLoadStorageConfigReadsOverridesAndValidatesDatabaseURL(t *testing.T) {
 	if storageCfg.DatabaseURL != "postgres://lore:secret@db.internal:5432/lore" {
 		t.Fatalf("DatabaseURL = %q, want original URL", storageCfg.DatabaseURL)
 	}
+	if storageCfg.Backend != store.BackendPostgreSQL {
+		t.Fatalf("Backend = %q, want %q", storageCfg.Backend, store.BackendPostgreSQL)
+	}
 
 	applied := storageCfg.Apply(base)
 	if applied.DataDir != overrideDir {
@@ -336,6 +346,9 @@ func TestLoadStorageConfigReadsOverridesAndValidatesDatabaseURL(t *testing.T) {
 	}
 	if applied.DatabaseURL != storageCfg.DatabaseURL {
 		t.Fatalf("applied DatabaseURL = %q, want %q", applied.DatabaseURL, storageCfg.DatabaseURL)
+	}
+	if applied.SelectedBackend() != store.BackendPostgreSQL {
+		t.Fatalf("applied SelectedBackend() = %q, want %q", applied.SelectedBackend(), store.BackendPostgreSQL)
 	}
 }
 
@@ -349,6 +362,9 @@ func TestLoadStorageConfigAcceptsPathBasedDatabaseURL(t *testing.T) {
 	}
 	if storageCfg.DatabaseURL != "sqlite:///tmp/lore.db" {
 		t.Fatalf("DatabaseURL = %q, want sqlite:///tmp/lore.db", storageCfg.DatabaseURL)
+	}
+	if storageCfg.Backend != store.BackendSQLite {
+		t.Fatalf("Backend = %q, want %q", storageCfg.Backend, store.BackendSQLite)
 	}
 }
 
@@ -422,7 +438,7 @@ func TestCmdServeInvalidDatabaseURLFailsFastBeforeStoreInit(t *testing.T) {
 	}
 }
 
-func TestCmdServeValidDatabaseURLDoesNotEnablePostgresPath(t *testing.T) {
+func TestCmdServeValidPostgresDatabaseURLEnablesPostgresPath(t *testing.T) {
 	cfg := testConfig(t)
 	stubRuntimeHooks(t)
 	storageDir := t.TempDir()
@@ -440,10 +456,10 @@ func TestCmdServeValidDatabaseURLDoesNotEnablePostgresPath(t *testing.T) {
 	storeOpen = func(in store.Config) (store.Contract, error) {
 		seenDatabaseURL = in.DatabaseURL
 		seenDataDir = in.DataDir
-		if in.SelectedBackend() != store.BackendSQLite {
-			t.Fatalf("SelectedBackend() = %q, want %q", in.SelectedBackend(), store.BackendSQLite)
+		if in.SelectedBackend() != store.BackendPostgreSQL {
+			t.Fatalf("SelectedBackend() = %q, want %q", in.SelectedBackend(), store.BackendPostgreSQL)
 		}
-		return store.New(in)
+		return noopStore{}, nil
 	}
 	newHTTPServer = func(s store.Contract, cfg server.Config) *server.Server {
 		seenPort = cfg.Port
@@ -463,6 +479,58 @@ func TestCmdServeValidDatabaseURLDoesNotEnablePostgresPath(t *testing.T) {
 	}
 	if seenPort != 7555 {
 		t.Fatalf("expected runtime port 7555 from PORT fallback, got %d", seenPort)
+	}
+}
+
+func TestCmdMCPUsesDatabaseURLStorageConfig(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+	stubExitWithPanic(t)
+
+	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
+	withArgs(t, "lore", "mcp")
+
+	seenDatabaseURL := ""
+	storeOpen = func(in store.Config) (store.Contract, error) {
+		seenDatabaseURL = in.DatabaseURL
+		if in.SelectedBackend() != store.BackendPostgreSQL {
+			t.Fatalf("SelectedBackend() = %q, want %q", in.SelectedBackend(), store.BackendPostgreSQL)
+		}
+		return noopStore{}, nil
+	}
+
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdMCP(cfg) })
+	if recovered != nil {
+		t.Fatalf("expected successful mcp startup, got panic=%v stderr=%q", recovered, stderr)
+	}
+	if seenDatabaseURL == "" {
+		t.Fatalf("expected store config to retain DATABASE_URL")
+	}
+}
+
+func TestCmdMCPInvalidDatabaseURLFailsFastBeforeStoreInit(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+	stubExitWithPanic(t)
+
+	t.Setenv("DATABASE_URL", "postgres://")
+	withArgs(t, "lore", "mcp")
+
+	storeCalled := false
+	storeOpen = func(store.Config) (store.Contract, error) {
+		storeCalled = true
+		return nil, nil
+	}
+
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdMCP(cfg) })
+	if _, ok := recovered.(exitCode); !ok {
+		t.Fatalf("expected fatal exit, got %v", recovered)
+	}
+	if !strings.Contains(stderr, "DATABASE_URL") {
+		t.Fatalf("expected DATABASE_URL config error, got %q", stderr)
+	}
+	if storeCalled {
+		t.Fatalf("expected fail-fast before store initialization")
 	}
 }
 

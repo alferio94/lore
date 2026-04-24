@@ -119,6 +119,14 @@ var (
 	newObsidianWatcher = obsidian.NewWatcher
 )
 
+func openConfiguredStore(cfg store.Config) (store.Contract, error) {
+	storageCfg, err := loadStorageConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return storeOpen(storageCfg.Apply(cfg))
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -201,13 +209,6 @@ func cmdServe(cfg store.Config) {
 		fatal(err)
 	}
 
-	storageCfg, err := loadStorageConfig(cfg)
-	if err != nil {
-		fatal(err)
-	}
-
-	cfg = storageCfg.Apply(cfg)
-
 	// Allow: lore serve --dev-auth
 	devAuth := false
 	for i := 2; i < len(os.Args); i++ {
@@ -216,7 +217,7 @@ func cmdServe(cfg store.Config) {
 		}
 	}
 
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -328,7 +329,7 @@ func cmdMCP(cfg store.Config) {
 	// Always normalize (lowercase + trim)
 	detectedProject, _ = store.NormalizeProject(detectedProject)
 
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -347,7 +348,7 @@ func cmdMCP(cfg store.Config) {
 }
 
 func cmdTUI(cfg store.Config) {
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -405,7 +406,7 @@ func cmdSearch(cfg store.Config) {
 		exitFunc(1)
 	}
 
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 		return
@@ -474,7 +475,7 @@ func cmdSave(cfg store.Config) {
 		}
 	}
 
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -533,7 +534,7 @@ func cmdTimeline(cfg store.Config) {
 		}
 	}
 
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -595,7 +596,7 @@ func cmdContext(cfg store.Config) {
 		}
 	}
 
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -615,7 +616,7 @@ func cmdContext(cfg store.Config) {
 }
 
 func cmdStats(cfg store.Config) {
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -645,7 +646,7 @@ func cmdExport(cfg store.Config) {
 		outFile = os.Args[2]
 	}
 
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -688,7 +689,7 @@ func cmdImport(cfg store.Config) {
 		fatal(fmt.Errorf("parse %s: %w", inFile, err))
 	}
 
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -738,7 +739,7 @@ func cmdSync(cfg store.Config) {
 
 	syncDir := ".lore"
 
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -945,7 +946,7 @@ func cmdObsidianExport(cfg store.Config) {
 		exportCfg.Since = sinceTime
 	}
 
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -1016,7 +1017,7 @@ func cmdProjects(cfg store.Config) {
 }
 
 func cmdProjectsList(cfg store.Config) {
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -1167,7 +1168,7 @@ func cmdProjectsConsolidate(cfg store.Config) {
 		}
 	}
 
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -1423,7 +1424,7 @@ func cmdProjectsPrune(cfg store.Config) {
 		}
 	}
 
-	s, err := storeOpen(cfg)
+	s, err := openConfiguredStore(cfg)
 	if err != nil {
 		fatal(err)
 	}
@@ -1646,7 +1647,7 @@ Environment:
   LORE_DATA_DIR    Override SQLite data directory (default: ~/.lore)
   LORE_PORT        Preferred HTTP server port for serve (default: 7437)
   PORT             Cloud runtime fallback port when LORE_PORT is unset
-  DATABASE_URL     Forward-compatible storage URL (syntax-validated only; SQLite remains active)
+  DATABASE_URL     Storage URL; postgres:// selects PostgreSQL, others keep SQLite default
   LORE_PROJECT     Override auto-detected project name for MCP server
 
 MCP Configuration (add to your agent's config):

@@ -1055,7 +1055,10 @@ func TestCmdServeRuntimeContractIntegrationLike(t *testing.T) {
 	storeOpen = func(in store.Config) (store.Contract, error) {
 		seenStoreDataDir = in.DataDir
 		seenStoreDatabaseURL = in.DatabaseURL
-		return store.New(in)
+		if in.SelectedBackend() != store.BackendPostgreSQL {
+			t.Fatalf("SelectedBackend() = %q, want %q", in.SelectedBackend(), store.BackendPostgreSQL)
+		}
+		return noopStore{}, nil
 	}
 	newHTTPServer = func(s store.Contract, cfg engramsrv.Config) *engramsrv.Server {
 		seenServerHost = cfg.Host
