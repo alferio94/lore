@@ -5,14 +5,18 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alferio94/lore/internal/store"
+	"github.com/ory/dockertest/v3"
+	"github.com/ory/dockertest/v3/docker"
 )
 
 func newE2EServer(t *testing.T) (*store.Store, *httptest.Server) {
@@ -35,6 +39,64 @@ func newE2EServer(t *testing.T) (*store.Store, *httptest.Server) {
 	})
 
 	return s, httpServer
+}
+
+func newPostgresE2EServer(t *testing.T) (*store.PostgresStore, *httptest.Server) {
+	t.Helper()
+
+	pool, err := dockertest.NewPool("")
+	if err != nil {
+		t.Skipf("docker unavailable: %v", err)
+	}
+
+	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
+		Repository: "postgres",
+		Tag:        "16-alpine",
+		Env: []string{
+			"POSTGRES_USER=lore",
+			"POSTGRES_PASSWORD=lore",
+			"POSTGRES_DB=lore",
+		},
+	}, func(config *docker.HostConfig) {
+		config.AutoRemove = true
+		config.RestartPolicy = docker.RestartPolicy{Name: "no"}
+	})
+	if err != nil {
+		t.Skipf("postgres container unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = pool.Purge(resource) })
+
+	databaseURL := fmt.Sprintf("postgres://lore:lore@127.0.0.1:%s/lore?sslmode=disable", resource.GetPort("5432/tcp"))
+
+	var opened store.Contract
+	err = pool.Retry(func() error {
+		opened, err = store.Open(store.Config{
+			Backend:              store.BackendPostgreSQL,
+			DatabaseURL:          databaseURL,
+			MaxObservationLength: 50000,
+			MaxContextResults:    20,
+			MaxSearchResults:     20,
+			DedupeWindow:         15 * time.Minute,
+		})
+		return err
+	})
+	if err != nil {
+		t.Skipf("postgres did not become ready: %v", err)
+	}
+
+	pg, ok := opened.(*store.PostgresStore)
+	if !ok {
+		_ = opened.Close()
+		t.Fatalf("Open() returned %T, want *store.PostgresStore", opened)
+	}
+
+	httpServer := httptest.NewServer(New(pg, 0).Handler())
+	t.Cleanup(func() {
+		httpServer.Close()
+		_ = pg.Close()
+	})
+
+	return pg, httpServer
 }
 
 func postJSON(t *testing.T, client *http.Client, url string, body any) *http.Response {
@@ -269,6 +331,115 @@ func TestPassiveCaptureEndpointE2E(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 search result, got %d", len(results))
 	}
+}
+
+func TestPostgresApprovedSliceE2E(t *testing.T) {
+	_, ts := newPostgresE2EServer(t)
+	client := ts.Client()
+
+	healthResp, err := client.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	if healthResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 health, got %d", healthResp.StatusCode)
+	}
+	_ = healthResp.Body.Close()
+
+	sessionResp := postJSON(t, client, ts.URL+"/sessions", map[string]any{
+		"id":        "pg-e2e",
+		"project":   "lore",
+		"directory": "/tmp/lore",
+	})
+	if sessionResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 creating session, got %d", sessionResp.StatusCode)
+	}
+	_ = sessionResp.Body.Close()
+
+	createResp := postJSON(t, client, ts.URL+"/observations", map[string]any{
+		"session_id": "pg-e2e",
+		"type":       "architecture",
+		"title":      "Postgres slice",
+		"content":    "Keep local sqlite default and postgres additive",
+		"project":    "lore",
+		"scope":      "project",
+		"topic_key":  "architecture/postgres-slice",
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 creating observation, got %d", createResp.StatusCode)
+	}
+	body := decodeJSON[map[string]any](t, createResp)
+	id := int64(body["id"].(float64))
+
+	updateReq, err := http.NewRequest(http.MethodPatch, ts.URL+"/observations/"+strconv.FormatInt(id, 10), strings.NewReader(`{"content":"Keep local sqlite default, postgres additive, and sync scoped"}`))
+	if err != nil {
+		t.Fatalf("new patch request: %v", err)
+	}
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateResp, err := client.Do(updateReq)
+	if err != nil {
+		t.Fatalf("patch observation: %v", err)
+	}
+	if updateResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 patching observation, got %d", updateResp.StatusCode)
+	}
+	_ = updateResp.Body.Close()
+
+	getResp, err := client.Get(ts.URL + "/observations/" + strconv.FormatInt(id, 10))
+	if err != nil {
+		t.Fatalf("get observation: %v", err)
+	}
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 getting observation, got %d", getResp.StatusCode)
+	}
+	obs := decodeJSON[map[string]any](t, getResp)
+	if !strings.Contains(obs["content"].(string), "sync scoped") {
+		t.Fatalf("expected updated content, got %q", obs["content"].(string))
+	}
+
+	timelineResp, err := client.Get(ts.URL + "/timeline?observation_id=" + strconv.FormatInt(id, 10) + "&before=1&after=1")
+	if err != nil {
+		t.Fatalf("timeline: %v", err)
+	}
+	if timelineResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 timeline, got %d", timelineResp.StatusCode)
+	}
+	_ = timelineResp.Body.Close()
+
+	searchResp, err := client.Get(ts.URL + "/search?q=postgres&project=lore&scope=project&limit=10")
+	if err != nil {
+		t.Fatalf("search request: %v", err)
+	}
+	if searchResp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 search unsupported, got %d", searchResp.StatusCode)
+	}
+	searchBody, _ := io.ReadAll(searchResp.Body)
+	_ = searchResp.Body.Close()
+	if !strings.Contains(string(searchBody), "does not support search") {
+		t.Fatalf("expected explicit unsupported search error, got %q", string(searchBody))
+	}
+
+	deleteReq, err := http.NewRequest(http.MethodDelete, ts.URL+"/observations/"+strconv.FormatInt(id, 10), nil)
+	if err != nil {
+		t.Fatalf("new delete request: %v", err)
+	}
+	deleteResp, err := client.Do(deleteReq)
+	if err != nil {
+		t.Fatalf("delete observation: %v", err)
+	}
+	if deleteResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 deleting observation, got %d", deleteResp.StatusCode)
+	}
+	_ = deleteResp.Body.Close()
+
+	missingResp, err := client.Get(ts.URL + "/observations/" + strconv.FormatInt(id, 10))
+	if err != nil {
+		t.Fatalf("get deleted observation: %v", err)
+	}
+	if missingResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 after soft delete, got %d", missingResp.StatusCode)
+	}
+	_ = missingResp.Body.Close()
 }
 
 func TestPassiveCaptureEndpointEmptyContentE2E(t *testing.T) {

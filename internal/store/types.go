@@ -317,14 +317,16 @@ type Backend string
 
 const BackendSQLite Backend = "sqlite"
 
+const BackendPostgreSQL Backend = "postgresql"
+
 type Config struct {
-	Backend             Backend
-	DataDir             string
-	DatabaseURL         string
+	Backend              Backend
+	DataDir              string
+	DatabaseURL          string
 	MaxObservationLength int
-	MaxContextResults   int
-	MaxSearchResults    int
-	DedupeWindow        time.Duration
+	MaxContextResults    int
+	MaxSearchResults     int
+	DedupeWindow         time.Duration
 }
 
 func (cfg Config) SelectedBackend() Backend {

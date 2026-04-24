@@ -142,9 +142,27 @@ The binary includes SQLite (via [modernc.org/sqlite](https://pkg.go.dev/modernc.
 | `LORE_DATA_DIR` | Data directory | `~/.lore` (Windows: `%USERPROFILE%\.lore`) |
 | `LORE_PORT` | Preferred HTTP server port for `lore serve` (highest env precedence) | `7437` |
 | `PORT` | Cloud-host fallback port when `LORE_PORT` is unset | unset |
-| `DATABASE_URL` | Forward-compatible external DB URL (syntax validation only; SQLite remains active) | unset |
+| `DATABASE_URL` | `postgres://` / `postgresql://` selects PostgreSQL; other URLs keep SQLite as default | unset |
 
 Port precedence in `lore serve`: positional argument (`lore serve 9090`) → `LORE_PORT` → `PORT` → `7437`.
+
+Backend selection in `lore serve`:
+
+- unset `DATABASE_URL` → SQLite
+- `postgres://...` or `postgresql://...` → PostgreSQL
+- any other valid URL (for example `sqlite:///tmp/lore.db`) → SQLite
+- malformed `DATABASE_URL` → startup fails before store initialization
+
+## Local PostgreSQL validation
+
+This repo includes a host-app validation path for the first PostgreSQL slice:
+
+```bash
+docker compose -f docker-compose.postgres.yml up -d postgres
+scripts/validate-postgres-local.sh
+```
+
+The script starts only PostgreSQL in Docker and runs the Go app locally against it. It verifies `/health`, session create/end, and core observation CRUD. Search parity, full app containerization, and deployment wiring remain out of scope for this change.
 
 ---
 

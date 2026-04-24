@@ -112,8 +112,17 @@ lore help               Show help
 | `LORE_DATA_DIR` | Override data directory | `~/.lore` |
 | `LORE_PORT` | Preferred HTTP server port for `lore serve` | `7437` |
 | `PORT` | Cloud-host fallback port when `LORE_PORT` is unset | unset |
-| `DATABASE_URL` | Forward-compatible storage input (syntax-validated only; SQLite stays active) | unset |
+| `DATABASE_URL` | `postgres://` / `postgresql://` selects PostgreSQL; other URLs keep SQLite default | unset |
 | `LORE_PROJECT` | Override project name for MCP server | auto-detected via git |
+
+Selection rules:
+
+- unset `DATABASE_URL` → SQLite remains active
+- PostgreSQL URL → PostgreSQL backend bootstrap slice (health, sessions, core observations, sync journal)
+- non-PostgreSQL URL → SQLite remains active
+- malformed URL → startup fails before store initialization
+
+Local PostgreSQL validation uses `docker-compose.postgres.yml` plus `scripts/validate-postgres-local.sh` to run PostgreSQL in Docker while the Go app runs on the host. Search parity, full containerization, and deployment changes remain out of scope.
 
 ---
 

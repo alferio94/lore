@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net"
@@ -172,6 +173,32 @@ func TestHandleHealthReturnsUnavailableWhenStoreIsUnavailable(t *testing.T) {
 	}
 	if body["reason"] != "store unavailable" {
 		t.Fatalf("reason = %v, want store unavailable", body["reason"])
+	}
+}
+
+type healthOnlyContract struct {
+	store.Contract
+	pingErr error
+}
+
+func (h healthOnlyContract) Ping(context.Context) error { return h.pingErr }
+
+func TestHandleHealthUsesBackendNeutralPingContract(t *testing.T) {
+	srv := NewWithConfig(healthOnlyContract{}, Config{Host: "127.0.0.1", Port: 0, Version: "pg-test"})
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from backend-neutral ping contract, got %d", rec.Code)
+	}
+
+	srv = NewWithConfig(healthOnlyContract{pingErr: errors.New("db unavailable")}, Config{Host: "127.0.0.1", Port: 0, Version: "pg-test"})
+	req = httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when ping contract fails, got %d", rec.Code)
 	}
 }
 

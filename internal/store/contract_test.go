@@ -44,3 +44,27 @@ func TestOpenRejectsUnsupportedBackend(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestOpenPostgreSQLBackendReturnsOpenError(t *testing.T) {
+	cfg := mustDefaultConfig(t)
+	cfg.Backend = BackendPostgreSQL
+	cfg.DatabaseURL = "postgres://"
+
+	opened, err := Open(cfg)
+	if err == nil {
+		t.Fatalf("expected Open() error for invalid PostgreSQL config")
+	}
+	if opened != nil {
+		t.Fatalf("Open() returned non-nil store on error: %T", opened)
+	}
+	if !strings.Contains(err.Error(), "invalid postgres DATABASE_URL") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestUnsupportedBackendFeatureErrorMessage(t *testing.T) {
+	err := ErrUnsupportedBackendFeature{Backend: BackendPostgreSQL, Feature: "search"}
+	if !strings.Contains(err.Error(), "backend postgresql does not support search") {
+		t.Fatalf("unexpected error text: %q", err.Error())
+	}
+}
