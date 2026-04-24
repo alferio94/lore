@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	postgresbackend "github.com/alferio94/lore/internal/store/backend/postgres"
+	"github.com/lib/pq"
 )
 
 type PostgresStore struct {
@@ -588,38 +591,676 @@ func (s *PostgresStore) PruneProject(string) (*PruneResult, error) {
 func (s *PostgresStore) MergeProjects([]string, string) (*MergeResult, error) {
 	return nil, s.unsupported("project merge")
 }
-func (s *PostgresStore) ListSkills(ListSkillsParams) ([]Skill, error) {
-	return nil, s.unsupported("skills catalog")
+
+func (s *PostgresStore) loadSkillRelationships(db queryer, skillID int64) ([]StackRef, []CategoryRef, error) {
+	stackRows, err := db.Query(`
+		SELECT st.id, st.name, st.display_name
+		FROM skill_stacks ss
+		JOIN stacks st ON st.id = ss.stack_id
+		WHERE ss.skill_id = $1
+		ORDER BY st.name ASC
+	`, skillID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer stackRows.Close()
+
+	stacks := make([]StackRef, 0)
+	for stackRows.Next() {
+		var ref StackRef
+		if err := stackRows.Scan(&ref.ID, &ref.Name, &ref.DisplayName); err != nil {
+			return nil, nil, err
+		}
+		stacks = append(stacks, ref)
+	}
+	if err := stackRows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	categoryRows, err := db.Query(`
+		SELECT c.id, c.name, c.display_name
+		FROM skill_categories sc
+		JOIN categories c ON c.id = sc.category_id
+		WHERE sc.skill_id = $1
+		ORDER BY c.name ASC
+	`, skillID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer categoryRows.Close()
+
+	categories := make([]CategoryRef, 0)
+	for categoryRows.Next() {
+		var ref CategoryRef
+		if err := categoryRows.Scan(&ref.ID, &ref.Name, &ref.DisplayName); err != nil {
+			return nil, nil, err
+		}
+		categories = append(categories, ref)
+	}
+	if err := categoryRows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	return stacks, categories, nil
 }
-func (s *PostgresStore) GetSkill(string) (*Skill, error) { return nil, s.unsupported("skills catalog") }
-func (s *PostgresStore) CreateSkill(CreateSkillParams) (*Skill, error) {
-	return nil, s.unsupported("skills catalog")
+
+func postgresSkillSearchVector(alias string) string {
+	qualify := func(column string) string {
+		if alias == "" {
+			return column
+		}
+		return alias + "." + column
+	}
+
+	return strings.Join([]string{
+		fmt.Sprintf("setweight(to_tsvector('simple', COALESCE(%s, '')), 'A')", qualify("name")),
+		fmt.Sprintf("setweight(to_tsvector('simple', COALESCE(%s, '')), 'A')", qualify("display_name")),
+		fmt.Sprintf("setweight(to_tsvector('simple', COALESCE(%s, '')), 'B')", qualify("triggers")),
+		fmt.Sprintf("setweight(to_tsvector('simple', COALESCE(%s, '')), 'C')", qualify("content")),
+	}, " || ")
 }
-func (s *PostgresStore) UpdateSkill(string, UpdateSkillParams) (*Skill, error) {
-	return nil, s.unsupported("skills catalog")
+
+func postgresSkillSearchQuery(query string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsLetter(r), unicode.IsNumber(r):
+			return r
+		case strings.ContainsRune("-_./#+", r):
+			return r
+		default:
+			return ' '
+		}
+	}, query)
+
+	tokens := make([]string, 0)
+	for _, token := range strings.Fields(cleaned) {
+		tokens = append(tokens, `"`+strings.Trim(token, `"'`)+`"`)
+	}
+	return strings.Join(tokens, " ")
 }
-func (s *PostgresStore) DeleteSkill(string, string) error { return s.unsupported("skills catalog") }
-func (s *PostgresStore) ListStacks() ([]Stack, error)     { return nil, s.unsupported("stack catalog") }
-func (s *PostgresStore) CreateStack(string, string) (*Stack, error) {
-	return nil, s.unsupported("stack catalog")
+
+func normalizePostgresCatalogError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && string(pqErr.Code) == "23505" {
+		if constraint := strings.TrimSpace(pqErr.Constraint); constraint != "" {
+			return fmt.Errorf("UNIQUE constraint failed: %s", constraint)
+		}
+		return fmt.Errorf("UNIQUE constraint failed")
+	}
+
+	upper := strings.ToUpper(err.Error())
+	if strings.Contains(upper, "DUPLICATE KEY VALUE") || strings.Contains(upper, "UNIQUE") {
+		return fmt.Errorf("UNIQUE constraint failed: %w", err)
+	}
+
+	return err
 }
-func (s *PostgresStore) DeleteStack(int64) error { return s.unsupported("stack catalog") }
+
+func scanSkill(scanner interface{ Scan(dest ...any) error }, skill *Skill) error {
+	return scanner.Scan(
+		&skill.ID,
+		&skill.Name,
+		&skill.DisplayName,
+		&skill.Triggers,
+		&skill.Content,
+		&skill.CompactRules,
+		&skill.Version,
+		&skill.IsActive,
+		&skill.ChangedBy,
+		&skill.CreatedAt,
+		&skill.UpdatedAt,
+	)
+}
+
+func (s *PostgresStore) getSkillByID(db queryer, id int64, metadataOnly bool) (*Skill, error) {
+	contentExpr := "content"
+	rulesExpr := "compact_rules"
+	if metadataOnly {
+		contentExpr = `'' AS content`
+		rulesExpr = `'' AS compact_rules`
+	}
+
+	rows, err := db.Query(fmt.Sprintf(`
+		SELECT id, name, display_name, triggers, %s, %s, version, is_active, changed_by, created_at, updated_at
+		FROM skills
+		WHERE id = $1
+	`, contentExpr, rulesExpr), id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return nil, sql.ErrNoRows
+	}
+
+	var skill Skill
+	if err := scanSkill(rows, &skill); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	stacks, categories, err := s.loadSkillRelationships(db, skill.ID)
+	if err != nil {
+		return nil, err
+	}
+	skill.Stacks = stacks
+	skill.Categories = categories
+	return &skill, nil
+}
+
+func (s *PostgresStore) getSkillByName(db queryer, name string, metadataOnly bool) (*Skill, error) {
+	rows, err := db.Query(`SELECT id FROM skills WHERE name = $1`, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return nil, sql.ErrNoRows
+	}
+	var id int64
+	if err := rows.Scan(&id); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return s.getSkillByID(db, id, metadataOnly)
+}
+
+func insertSkillRelationshipsTx(tx *sql.Tx, skillID int64, stackIDs, categoryIDs []int64) error {
+	for _, stackID := range stackIDs {
+		if _, err := tx.Exec(`INSERT INTO skill_stacks (skill_id, stack_id) VALUES ($1, $2)`, skillID, stackID); err != nil {
+			return err
+		}
+	}
+	for _, categoryID := range categoryIDs {
+		if _, err := tx.Exec(`INSERT INTO skill_categories (skill_id, category_id) VALUES ($1, $2)`, skillID, categoryID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeSkillVersionTx(tx *sql.Tx, skillID int64, version int, content, compactRules, changedBy string) error {
+	_, err := tx.Exec(`
+		INSERT INTO skill_versions (skill_id, version, content, compact_rules, changed_by)
+		VALUES ($1, $2, $3, $4, $5)
+	`, skillID, version, content, compactRules, changedBy)
+	return err
+}
+
+func (s *PostgresStore) ListSkills(params ListSkillsParams) ([]Skill, error) {
+	args := make([]any, 0, 3)
+	baseQuery := `
+		SELECT sk.id, sk.name, sk.display_name, sk.triggers, '' AS content, '' AS compact_rules,
+		       sk.version, sk.is_active, sk.changed_by, sk.created_at, sk.updated_at
+		FROM skills sk
+	`
+	where := []string{"sk.is_active = TRUE"}
+	orderBy := "ORDER BY sk.name ASC"
+
+	if params.Query != "" {
+		searchQuery := postgresSkillSearchQuery(params.Query)
+		if searchQuery == "" {
+			return []Skill{}, nil
+		}
+		vector := postgresSkillSearchVector("sk")
+		args = append(args, searchQuery)
+		baseQuery = fmt.Sprintf(`
+			SELECT sk.id, sk.name, sk.display_name, sk.triggers, '' AS content, '' AS compact_rules,
+			       sk.version, sk.is_active, sk.changed_by, sk.created_at, sk.updated_at,
+			       ts_rank_cd(%s, websearch_to_tsquery('simple', $1)) AS rank
+			FROM skills sk
+		`, vector)
+		where = append(where, fmt.Sprintf(`%s @@ websearch_to_tsquery('simple', $1)`, vector))
+		orderBy = "ORDER BY rank DESC, sk.name ASC"
+	}
+
+	if params.StackID != nil {
+		args = append(args, *params.StackID)
+		where = append(where, fmt.Sprintf("sk.id IN (SELECT skill_id FROM skill_stacks WHERE stack_id = $%d)", len(args)))
+	}
+	if params.CategoryID != nil {
+		args = append(args, *params.CategoryID)
+		where = append(where, fmt.Sprintf("sk.id IN (SELECT skill_id FROM skill_categories WHERE category_id = $%d)", len(args)))
+	}
+
+	rows, err := s.db.Query(baseQuery+" WHERE "+strings.Join(where, " AND ")+" "+orderBy, args...)
+	if err != nil {
+		return nil, normalizePostgresCatalogError(err)
+	}
+	defer rows.Close()
+
+	results := make([]Skill, 0)
+	for rows.Next() {
+		var skill Skill
+		if params.Query != "" {
+			var rank float64
+			if err := rows.Scan(&skill.ID, &skill.Name, &skill.DisplayName, &skill.Triggers, &skill.Content, &skill.CompactRules, &skill.Version, &skill.IsActive, &skill.ChangedBy, &skill.CreatedAt, &skill.UpdatedAt, &rank); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := scanSkill(rows, &skill); err != nil {
+				return nil, err
+			}
+		}
+		stacks, categories, err := s.loadSkillRelationships(s.db, skill.ID)
+		if err != nil {
+			return nil, err
+		}
+		skill.Stacks = stacks
+		skill.Categories = categories
+		results = append(results, skill)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (s *PostgresStore) GetSkill(name string) (*Skill, error) {
+	return s.getSkillByName(s.db, name, false)
+}
+
+func (s *PostgresStore) CreateSkill(params CreateSkillParams) (*Skill, error) {
+	changedBy := params.ChangedBy
+	if changedBy == "" {
+		changedBy = "system"
+	}
+
+	var created *Skill
+	err := s.withTx(func(tx *sql.Tx) error {
+		var skillID int64
+		if err := tx.QueryRow(`
+			INSERT INTO skills (name, display_name, triggers, content, compact_rules, version, is_active, changed_by)
+			VALUES ($1, $2, $3, $4, $5, 1, TRUE, $6)
+			RETURNING id
+		`, params.Name, params.DisplayName, params.Triggers, params.Content, params.CompactRules, changedBy).Scan(&skillID); err != nil {
+			return normalizePostgresCatalogError(err)
+		}
+
+		if err := insertSkillRelationshipsTx(tx, skillID, params.StackIDs, params.CategoryIDs); err != nil {
+			return normalizePostgresCatalogError(err)
+		}
+		if err := writeSkillVersionTx(tx, skillID, 1, params.Content, params.CompactRules, changedBy); err != nil {
+			return normalizePostgresCatalogError(err)
+		}
+
+		skill, err := s.getSkillByID(tx, skillID, false)
+		if err != nil {
+			return err
+		}
+		created = skill
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+func (s *PostgresStore) UpdateSkill(name string, params UpdateSkillParams) (*Skill, error) {
+	changedBy := params.ChangedBy
+	if changedBy == "" {
+		changedBy = "system"
+	}
+
+	var updated *Skill
+	err := s.withTx(func(tx *sql.Tx) error {
+		var skillID int64
+		var currentVersion int
+		if err := tx.QueryRow(`SELECT id, version FROM skills WHERE name = $1 FOR UPDATE`, name).Scan(&skillID, &currentVersion); err != nil {
+			return err
+		}
+
+		newVersion := currentVersion + 1
+		setClauses := []string{"version = $1", "changed_by = $2", "updated_at = to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')"}
+		args := []any{newVersion, changedBy}
+		placeholder := 3
+
+		if params.DisplayName != nil {
+			setClauses = append(setClauses, fmt.Sprintf("display_name = $%d", placeholder))
+			args = append(args, *params.DisplayName)
+			placeholder++
+		}
+		if params.Triggers != nil {
+			setClauses = append(setClauses, fmt.Sprintf("triggers = $%d", placeholder))
+			args = append(args, *params.Triggers)
+			placeholder++
+		}
+		if params.Content != nil {
+			setClauses = append(setClauses, fmt.Sprintf("content = $%d", placeholder))
+			args = append(args, *params.Content)
+			placeholder++
+		}
+		if params.CompactRules != nil {
+			setClauses = append(setClauses, fmt.Sprintf("compact_rules = $%d", placeholder))
+			args = append(args, *params.CompactRules)
+			placeholder++
+		}
+		args = append(args, skillID)
+
+		if _, err := tx.Exec("UPDATE skills SET "+strings.Join(setClauses, ", ")+fmt.Sprintf(" WHERE id = $%d", placeholder), args...); err != nil {
+			return normalizePostgresCatalogError(err)
+		}
+
+		if params.StackIDs != nil {
+			if _, err := tx.Exec(`DELETE FROM skill_stacks WHERE skill_id = $1`, skillID); err != nil {
+				return err
+			}
+			if err := insertSkillRelationshipsTx(tx, skillID, *params.StackIDs, nil); err != nil {
+				return normalizePostgresCatalogError(err)
+			}
+		}
+		if params.CategoryIDs != nil {
+			if _, err := tx.Exec(`DELETE FROM skill_categories WHERE skill_id = $1`, skillID); err != nil {
+				return err
+			}
+			if err := insertSkillRelationshipsTx(tx, skillID, nil, *params.CategoryIDs); err != nil {
+				return normalizePostgresCatalogError(err)
+			}
+		}
+
+		var content string
+		var compactRules string
+		if err := tx.QueryRow(`SELECT content, compact_rules FROM skills WHERE id = $1`, skillID).Scan(&content, &compactRules); err != nil {
+			return err
+		}
+		if err := writeSkillVersionTx(tx, skillID, newVersion, content, compactRules, changedBy); err != nil {
+			return normalizePostgresCatalogError(err)
+		}
+
+		skill, err := s.getSkillByID(tx, skillID, false)
+		if err != nil {
+			return err
+		}
+		updated = skill
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func (s *PostgresStore) DeleteSkill(name, changedBy string) error {
+	if changedBy == "" {
+		changedBy = "system"
+	}
+	result, err := s.db.Exec(`
+		UPDATE skills
+		SET is_active = FALSE, changed_by = $1, updated_at = to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')
+		WHERE name = $2
+	`, changedBy, name)
+	if err != nil {
+		return normalizePostgresCatalogError(err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListStacks() ([]Stack, error) {
+	rows, err := s.db.Query(`SELECT id, name, display_name FROM stacks ORDER BY name ASC`)
+	if err != nil {
+		return nil, normalizePostgresCatalogError(err)
+	}
+	defer rows.Close()
+
+	results := make([]Stack, 0)
+	for rows.Next() {
+		var stack Stack
+		if err := rows.Scan(&stack.ID, &stack.Name, &stack.DisplayName); err != nil {
+			return nil, err
+		}
+		results = append(results, stack)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (s *PostgresStore) CreateStack(name, displayName string) (*Stack, error) {
+	var id int64
+	if err := s.db.QueryRow(`INSERT INTO stacks (name, display_name) VALUES ($1, $2) RETURNING id`, name, displayName).Scan(&id); err != nil {
+		if normalized := normalizePostgresCatalogError(err); normalized != err {
+			return nil, normalized
+		}
+		result, execErr := s.db.Exec(`INSERT INTO stacks (name, display_name) VALUES ($1, $2)`, name, displayName)
+		if execErr != nil {
+			return nil, normalizePostgresCatalogError(execErr)
+		}
+		id, err = result.LastInsertId()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &Stack{ID: id, Name: name, DisplayName: displayName}, nil
+}
+
+func (s *PostgresStore) DeleteStack(id int64) error {
+	result, err := s.db.Exec(`DELETE FROM stacks WHERE id = $1`, id)
+	if err != nil {
+		return normalizePostgresCatalogError(err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *PostgresStore) ListCategories() ([]Category, error) {
-	return nil, s.unsupported("category catalog")
+	rows, err := s.db.Query(`SELECT id, name, display_name FROM categories ORDER BY name ASC`)
+	if err != nil {
+		return nil, normalizePostgresCatalogError(err)
+	}
+	defer rows.Close()
+
+	results := make([]Category, 0)
+	for rows.Next() {
+		var category Category
+		if err := rows.Scan(&category.ID, &category.Name, &category.DisplayName); err != nil {
+			return nil, err
+		}
+		results = append(results, category)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
 }
-func (s *PostgresStore) CreateCategory(string, string) (*Category, error) {
-	return nil, s.unsupported("category catalog")
+
+func (s *PostgresStore) CreateCategory(name, displayName string) (*Category, error) {
+	var id int64
+	if err := s.db.QueryRow(`INSERT INTO categories (name, display_name) VALUES ($1, $2) RETURNING id`, name, displayName).Scan(&id); err != nil {
+		if normalized := normalizePostgresCatalogError(err); normalized != err {
+			return nil, normalized
+		}
+		result, execErr := s.db.Exec(`INSERT INTO categories (name, display_name) VALUES ($1, $2)`, name, displayName)
+		if execErr != nil {
+			return nil, normalizePostgresCatalogError(execErr)
+		}
+		id, err = result.LastInsertId()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &Category{ID: id, Name: name, DisplayName: displayName}, nil
 }
-func (s *PostgresStore) DeleteCategory(int64) error { return s.unsupported("category catalog") }
+
+func (s *PostgresStore) DeleteCategory(id int64) error {
+	result, err := s.db.Exec(`DELETE FROM categories WHERE id = $1`, id)
+	if err != nil {
+		return normalizePostgresCatalogError(err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *PostgresStore) AdminStats() (AdminStats, error) {
-	return AdminStats{}, s.unsupported("admin stats")
+	var stats AdminStats
+	var firstErr error
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(DISTINCT project) FROM observations WHERE project IS NOT NULL AND deleted_at IS NULL`,
+	).Scan(&stats.ActiveProjects); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM skills WHERE is_active = TRUE`,
+	).Scan(&stats.ActiveSkills); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND created_at >= to_char(timezone('UTC', now()) - interval '7 days', 'YYYY-MM-DD HH24:MI:SS')`,
+	).Scan(&stats.ObservationsThisWeek); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE started_at >= to_char(timezone('UTC', now()) - interval '7 days', 'YYYY-MM-DD HH24:MI:SS')`,
+	).Scan(&stats.SessionsThisWeek); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	return stats, firstErr
 }
-func (s *PostgresStore) UpsertUser(string, string, string, string) (*User, error) {
-	return nil, s.unsupported("users")
+
+func (s *PostgresStore) UpsertUser(email, name, avatarURL, provider string) (*User, error) {
+	var user *User
+	err := s.withTx(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return err
+		}
+
+		var count int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
+			return err
+		}
+
+		role := "viewer"
+		if count == 0 {
+			role = "admin"
+		}
+
+		var upserted User
+		if err := tx.QueryRow(`
+			INSERT INTO users (email, name, role, avatar_url, provider)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT(email) DO UPDATE SET
+				name = EXCLUDED.name,
+				avatar_url = EXCLUDED.avatar_url,
+				provider = EXCLUDED.provider,
+				updated_at = to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')
+			RETURNING id, email, name, role, avatar_url, provider, created_at, updated_at
+		`, email, name, role, avatarURL, provider).Scan(
+			&upserted.ID,
+			&upserted.Email,
+			&upserted.Name,
+			&upserted.Role,
+			&upserted.AvatarURL,
+			&upserted.Provider,
+			&upserted.CreatedAt,
+			&upserted.UpdatedAt,
+		); err != nil {
+			return normalizePostgresCatalogError(err)
+		}
+		user = &upserted
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
 }
-func (s *PostgresStore) ListUsers() ([]User, error) { return nil, s.unsupported("users") }
-func (s *PostgresStore) UpdateUserRole(int64, string) (*User, error) {
-	return nil, s.unsupported("users")
+
+func (s *PostgresStore) ListUsers() ([]User, error) {
+	rows, err := s.db.Query(`
+		SELECT id, email, name, role, avatar_url, provider, created_at, updated_at
+		FROM users
+		ORDER BY created_at ASC
+	`)
+	if err != nil {
+		return nil, normalizePostgresCatalogError(err)
+	}
+	defer rows.Close()
+
+	results := make([]User, 0)
+	for rows.Next() {
+		var user User
+		if err := scanUser(rows, &user); err != nil {
+			return nil, err
+		}
+		results = append(results, user)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (s *PostgresStore) UpdateUserRole(id int64, role string) (*User, error) {
+	var user *User
+	err := s.withTx(func(tx *sql.Tx) error {
+		var updated User
+		err := tx.QueryRow(`
+			UPDATE users
+			SET role = $1, updated_at = to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')
+			WHERE id = $2
+			RETURNING id, email, name, role, avatar_url, provider, created_at, updated_at
+		`, role, id).Scan(
+			&updated.ID,
+			&updated.Email,
+			&updated.Name,
+			&updated.Role,
+			&updated.AvatarURL,
+			&updated.Provider,
+			&updated.CreatedAt,
+			&updated.UpdatedAt,
+		)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return normalizePostgresCatalogError(err)
+		}
+		user = &updated
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
 }
 
 func (s *PostgresStore) unsupported(feature string) error {
@@ -851,6 +1492,19 @@ func scanObservation(scanner interface{ Scan(dest ...any) error }, o *Observatio
 		&o.ID, &o.SyncID, &o.SessionID, &o.Type, &o.Title, &o.Content,
 		&o.ToolName, &o.Project, &o.Scope, &o.TopicKey, &o.RevisionCount, &o.DuplicateCount, &o.LastSeenAt,
 		&o.CreatedAt, &o.UpdatedAt, &o.DeletedAt,
+	)
+}
+
+func scanUser(scanner interface{ Scan(dest ...any) error }, user *User) error {
+	return scanner.Scan(
+		&user.ID,
+		&user.Email,
+		&user.Name,
+		&user.Role,
+		&user.AvatarURL,
+		&user.Provider,
+		&user.CreatedAt,
+		&user.UpdatedAt,
 	)
 }
 

@@ -146,7 +146,7 @@ The response should be `200 OK` only when the PostgreSQL-backed store is reachab
 ${LORE_BASE_URL}/mcp
 ```
 
-The smoke is complete when the MCP client initializes successfully and can perform a minimal memory write/read flow (for example `lore_save` followed by `lore_search` or `lore_get_observation`).
+The smoke is complete when the MCP client initializes successfully and can perform a minimal runtime flow. For PostgreSQL-backed hosted validation, include skill-catalog reads such as `lore_list_skills`, `lore_get_skill`, or `skills://{name}` after seeding a test skill.
 
 Excluded scope: no web view/dashboard/browser UI work, no TUI work, no agent configurators/plugins, and no production auth or multi-user hardening.
 
@@ -180,11 +180,11 @@ Backend selection:
 
 ## Local PostgreSQL validation
 
-This repo includes a host-app validation path for the first PostgreSQL slice:
+This repo includes a host-app validation path for the PostgreSQL shared-runtime surface:
 
 ```bash
 docker compose -f docker-compose.postgres.yml up -d postgres
 scripts/validate-postgres-local.sh
 ```
 
-That path validates Lore's shared-runtime backend behavior while still running the Go app locally.
+That path validates Lore's shared-runtime backend behavior while still running the Go app locally. The script seeds a skill directly into the PostgreSQL-backed store, then smokes `lore_list_skills`, `lore_get_skill`, and `skills://{name}` through `/mcp` so the hosted/runtime support boundary matches current PostgreSQL behavior.

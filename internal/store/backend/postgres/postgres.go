@@ -133,6 +133,69 @@ func Bootstrap(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_pg_sync_mutations_target_seq ON sync_mutations(target_key, seq)`,
 		`CREATE INDEX IF NOT EXISTS idx_pg_sync_mutations_project ON sync_mutations(project)`,
+		`CREATE TABLE IF NOT EXISTS skills (
+			id BIGSERIAL PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			display_name TEXT NOT NULL,
+			triggers TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL,
+			compact_rules TEXT NOT NULL DEFAULT '',
+			version INTEGER NOT NULL DEFAULT 1,
+			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			changed_by TEXT NOT NULL DEFAULT 'system',
+			created_at TEXT NOT NULL DEFAULT to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS'),
+			updated_at TEXT NOT NULL DEFAULT to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_skills_name ON skills(name)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_skills_active ON skills(is_active)`,
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_pg_skills_search_vector ON skills USING GIN ((%s))`, skillSearchVectorExpression()),
+		`CREATE TABLE IF NOT EXISTS stacks (
+			id BIGSERIAL PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			display_name TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_pg_stacks_name ON stacks(name)`,
+		`CREATE TABLE IF NOT EXISTS categories (
+			id BIGSERIAL PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			display_name TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_pg_categories_name ON categories(name)`,
+		`CREATE TABLE IF NOT EXISTS skill_stacks (
+			skill_id BIGINT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+			stack_id BIGINT NOT NULL REFERENCES stacks(id) ON DELETE CASCADE,
+			PRIMARY KEY (skill_id, stack_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_skill_stacks_stack ON skill_stacks(stack_id)`,
+		`CREATE TABLE IF NOT EXISTS skill_categories (
+			skill_id BIGINT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+			category_id BIGINT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+			PRIMARY KEY (skill_id, category_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_skill_categories_category ON skill_categories(category_id)`,
+		`CREATE TABLE IF NOT EXISTS skill_versions (
+			id BIGSERIAL PRIMARY KEY,
+			skill_id BIGINT NOT NULL REFERENCES skills(id),
+			version INTEGER NOT NULL,
+			content TEXT NOT NULL,
+			compact_rules TEXT NOT NULL DEFAULT '',
+			changed_by TEXT NOT NULL DEFAULT 'system',
+			created_at TEXT NOT NULL DEFAULT to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_pg_skill_versions_skill_version_unique ON skill_versions(skill_id, version)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_skill_versions_skill ON skill_versions(skill_id, version DESC)`,
+		`CREATE TABLE IF NOT EXISTS users (
+			id BIGSERIAL PRIMARY KEY,
+			email TEXT NOT NULL UNIQUE,
+			name TEXT NOT NULL DEFAULT '',
+			role TEXT NOT NULL DEFAULT 'viewer',
+			avatar_url TEXT NOT NULL DEFAULT '',
+			provider TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS'),
+			updated_at TEXT NOT NULL DEFAULT to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_pg_users_email ON users(email)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_users_role ON users(role)`,
 	}
 
 	for _, statement := range statements {
@@ -159,6 +222,15 @@ func observationSearchVectorExpression() string {
 		"setweight(to_tsvector('simple', COALESCE(type, '')), 'B')",
 		"setweight(to_tsvector('simple', COALESCE(tool_name, '')), 'B')",
 		"setweight(to_tsvector('simple', COALESCE(project, '')), 'B')",
+		"setweight(to_tsvector('simple', COALESCE(content, '')), 'C')",
+	}, " || ")
+}
+
+func skillSearchVectorExpression() string {
+	return strings.Join([]string{
+		"setweight(to_tsvector('simple', COALESCE(name, '')), 'A')",
+		"setweight(to_tsvector('simple', COALESCE(display_name, '')), 'A')",
+		"setweight(to_tsvector('simple', COALESCE(triggers, '')), 'B')",
 		"setweight(to_tsvector('simple', COALESCE(content, '')), 'C')",
 	}, " || ")
 }
