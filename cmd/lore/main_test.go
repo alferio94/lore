@@ -176,7 +176,7 @@ func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
 
 	t.Run("missing LORE_BASE_URL", func(t *testing.T) {
 		t.Setenv("LORE_BASE_URL", "")
-		t.Setenv("LORE_JWT_SECRET", "secret")
+		t.Setenv("LORE_JWT_SECRET", "staging-secret-at-least-32-bytes")
 
 		_, err := loadRuntimeConfig(nil)
 		if err == nil || !strings.Contains(err.Error(), "LORE_BASE_URL is required when LORE_ENV=staging") {
@@ -194,9 +194,19 @@ func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
 		}
 	})
 
+	t.Run("short LORE_JWT_SECRET", func(t *testing.T) {
+		t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
+		t.Setenv("LORE_JWT_SECRET", "short-secret")
+
+		_, err := loadRuntimeConfig(nil)
+		if err == nil || !strings.Contains(err.Error(), "LORE_JWT_SECRET must be at least 32 bytes") {
+			t.Fatalf("expected LORE_JWT_SECRET length staging error, got %v", err)
+		}
+	})
+
 	t.Run("staging defaults", func(t *testing.T) {
 		t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
-		t.Setenv("LORE_JWT_SECRET", "secret")
+		t.Setenv("LORE_JWT_SECRET", "staging-secret-at-least-32-bytes")
 
 		runtimeCfg, err := loadRuntimeConfig(nil)
 		if err != nil {
@@ -212,6 +222,37 @@ func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
 			t.Fatalf("CookieSecure = false, want true")
 		}
 	})
+}
+
+func TestLoadRuntimeConfigRailwayStagingUsesPublicURLAndPortFallback(t *testing.T) {
+	t.Setenv("LORE_ENV", "staging")
+	t.Setenv("LORE_HOST", "")
+	t.Setenv("LORE_PORT", "")
+	t.Setenv("PORT", "8443")
+	t.Setenv("LORE_BASE_URL", "https://preview.up.railway.app")
+	t.Setenv("LORE_JWT_SECRET", "railway-secret-at-least-32-bytes")
+	t.Setenv("LORE_COOKIE_SECURE", "")
+
+	runtimeCfg, err := loadRuntimeConfig(nil)
+	if err != nil {
+		t.Fatalf("loadRuntimeConfig() error = %v", err)
+	}
+
+	if runtimeCfg.Host != "0.0.0.0" {
+		t.Fatalf("Host = %q, want 0.0.0.0", runtimeCfg.Host)
+	}
+	if runtimeCfg.Port != 8443 {
+		t.Fatalf("Port = %d, want 8443 from PORT", runtimeCfg.Port)
+	}
+	if runtimeCfg.BaseURL != "https://preview.up.railway.app" {
+		t.Fatalf("BaseURL = %q, want https://preview.up.railway.app", runtimeCfg.BaseURL)
+	}
+	if runtimeCfg.JWTSecret != "railway-secret-at-least-32-bytes" {
+		t.Fatalf("JWTSecret = %q, want railway-secret-at-least-32-bytes", runtimeCfg.JWTSecret)
+	}
+	if !runtimeCfg.CookieSecure {
+		t.Fatalf("CookieSecure = false, want true")
+	}
 }
 
 func TestLoadRuntimeConfigInvalidValues(t *testing.T) {
@@ -299,6 +340,7 @@ func TestAdminBuildOAuthConfigsWiresCallbacks(t *testing.T) {
 
 func TestLoadStorageConfigDefaultsToStoreConfig(t *testing.T) {
 	base := testConfig(t)
+	t.Setenv("LORE_ENV", "")
 	t.Setenv("LORE_DATA_DIR", "")
 	t.Setenv("DATABASE_URL", "")
 
@@ -322,6 +364,7 @@ func TestLoadStorageConfigReadsOverridesAndValidatesDatabaseURL(t *testing.T) {
 	base := testConfig(t)
 	overrideDir := t.TempDir()
 
+	t.Setenv("LORE_ENV", "")
 	t.Setenv("LORE_DATA_DIR", overrideDir)
 	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
 
@@ -354,6 +397,7 @@ func TestLoadStorageConfigReadsOverridesAndValidatesDatabaseURL(t *testing.T) {
 
 func TestLoadStorageConfigAcceptsPathBasedDatabaseURL(t *testing.T) {
 	base := testConfig(t)
+	t.Setenv("LORE_ENV", "")
 	t.Setenv("DATABASE_URL", "sqlite:///tmp/lore.db")
 
 	storageCfg, err := loadStorageConfig(base)
@@ -368,8 +412,31 @@ func TestLoadStorageConfigAcceptsPathBasedDatabaseURL(t *testing.T) {
 	}
 }
 
+func TestLoadStorageConfigRejectsMissingDatabaseURLInStaging(t *testing.T) {
+	base := testConfig(t)
+	t.Setenv("LORE_ENV", "staging")
+	t.Setenv("DATABASE_URL", "")
+
+	_, err := loadStorageConfig(base)
+	if err == nil || !strings.Contains(err.Error(), "DATABASE_URL is required") {
+		t.Fatalf("expected staging DATABASE_URL requirement error, got %v", err)
+	}
+}
+
+func TestLoadStorageConfigRejectsNonPostgresDatabaseURLInStaging(t *testing.T) {
+	base := testConfig(t)
+	t.Setenv("LORE_ENV", "staging")
+	t.Setenv("DATABASE_URL", "sqlite:///tmp/lore.db")
+
+	_, err := loadStorageConfig(base)
+	if err == nil || !strings.Contains(err.Error(), "DATABASE_URL must use postgres:// or postgresql://") {
+		t.Fatalf("expected staging PostgreSQL DATABASE_URL error, got %v", err)
+	}
+}
+
 func TestLoadStorageConfigRejectsMalformedDatabaseURL(t *testing.T) {
 	base := testConfig(t)
+	t.Setenv("LORE_ENV", "")
 	t.Setenv("DATABASE_URL", "localhost:5432/lore")
 
 	_, err := loadStorageConfig(base)
@@ -389,6 +456,7 @@ func TestCmdServeStagingMissingJWTSecretFailsFast(t *testing.T) {
 	t.Setenv("LORE_ENV", "staging")
 	t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
 	t.Setenv("LORE_JWT_SECRET", "")
+	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
 	withArgs(t, "lore", "serve")
 
 	storeCalled := false
@@ -432,6 +500,64 @@ func TestCmdServeInvalidDatabaseURLFailsFastBeforeStoreInit(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "DATABASE_URL") {
 		t.Fatalf("expected DATABASE_URL config error, got %q", stderr)
+	}
+	if storeCalled {
+		t.Fatalf("expected fail-fast before store initialization")
+	}
+}
+
+func TestCmdServeStagingMissingDatabaseURLFailsFastBeforeStoreInit(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+	stubExitWithPanic(t)
+
+	t.Setenv("LORE_ENV", "staging")
+	t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
+	t.Setenv("LORE_JWT_SECRET", "staging-secret-at-least-32-bytes")
+	t.Setenv("DATABASE_URL", "")
+	withArgs(t, "lore", "serve")
+
+	storeCalled := false
+	storeOpen = func(store.Config) (store.Contract, error) {
+		storeCalled = true
+		return nil, nil
+	}
+
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdServe(cfg) })
+	if _, ok := recovered.(exitCode); !ok {
+		t.Fatalf("expected fatal exit, got %v", recovered)
+	}
+	if !strings.Contains(stderr, "DATABASE_URL is required") {
+		t.Fatalf("expected staging DATABASE_URL requirement error, got %q", stderr)
+	}
+	if storeCalled {
+		t.Fatalf("expected fail-fast before store initialization")
+	}
+}
+
+func TestCmdServeStagingNonPostgresDatabaseURLFailsFastBeforeStoreInit(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+	stubExitWithPanic(t)
+
+	t.Setenv("LORE_ENV", "staging")
+	t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
+	t.Setenv("LORE_JWT_SECRET", "staging-secret-at-least-32-bytes")
+	t.Setenv("DATABASE_URL", "sqlite:///tmp/lore.db")
+	withArgs(t, "lore", "serve")
+
+	storeCalled := false
+	storeOpen = func(store.Config) (store.Contract, error) {
+		storeCalled = true
+		return nil, nil
+	}
+
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdServe(cfg) })
+	if _, ok := recovered.(exitCode); !ok {
+		t.Fatalf("expected fatal exit, got %v", recovered)
+	}
+	if !strings.Contains(stderr, "DATABASE_URL must use postgres:// or postgresql://") {
+		t.Fatalf("expected staging PostgreSQL DATABASE_URL error, got %q", stderr)
 	}
 	if storeCalled {
 		t.Fatalf("expected fail-fast before store initialization")
@@ -541,7 +667,8 @@ func TestCmdServeStagingMissingBaseURLFailsFast(t *testing.T) {
 
 	t.Setenv("LORE_ENV", "staging")
 	t.Setenv("LORE_BASE_URL", "")
-	t.Setenv("LORE_JWT_SECRET", "secret")
+	t.Setenv("LORE_JWT_SECRET", "staging-secret-at-least-32-bytes")
+	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
 	withArgs(t, "lore", "serve")
 
 	storeCalled := false
@@ -569,8 +696,9 @@ func TestCmdServeStagingWithRequiredVarsStartsSuccessfully(t *testing.T) {
 
 	t.Setenv("LORE_ENV", "staging")
 	t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
-	t.Setenv("LORE_JWT_SECRET", "super-secret")
+	t.Setenv("LORE_JWT_SECRET", "super-secret-at-least-32-bytes-long")
 	t.Setenv("LORE_HOST", "")
+	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
 	withArgs(t, "lore", "serve")
 
 	storeCalled := false
@@ -579,10 +707,10 @@ func TestCmdServeStagingWithRequiredVarsStartsSuccessfully(t *testing.T) {
 
 	storeOpen = func(in store.Config) (store.Contract, error) {
 		storeCalled = true
-		if in.SelectedBackend() != store.BackendSQLite {
-			t.Fatalf("SelectedBackend() = %q, want %q", in.SelectedBackend(), store.BackendSQLite)
+		if in.SelectedBackend() != store.BackendPostgreSQL {
+			t.Fatalf("SelectedBackend() = %q, want %q", in.SelectedBackend(), store.BackendPostgreSQL)
 		}
-		return store.New(in)
+		return noopStore{}, nil
 	}
 	newHTTPServer = func(s store.Contract, cfg server.Config) *server.Server {
 		boundHost = cfg.Host
@@ -605,6 +733,54 @@ func TestCmdServeStagingWithRequiredVarsStartsSuccessfully(t *testing.T) {
 	}
 	if boundHost != "0.0.0.0" {
 		t.Fatalf("expected staging default host 0.0.0.0, got %q", boundHost)
+	}
+}
+
+func TestCmdServeRailwayStagingUsesPostgresStorageAndPortFallback(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+
+	t.Setenv("LORE_ENV", "staging")
+	t.Setenv("LORE_HOST", "")
+	t.Setenv("LORE_PORT", "")
+	t.Setenv("PORT", "8443")
+	t.Setenv("LORE_BASE_URL", "https://preview.up.railway.app")
+	t.Setenv("LORE_JWT_SECRET", "railway-secret-at-least-32-bytes")
+	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
+	withArgs(t, "lore", "serve")
+
+	seenDatabaseURL := ""
+	seenBackend := store.BackendSQLite
+	seenHost := ""
+	seenPort := 0
+
+	storeOpen = func(in store.Config) (store.Contract, error) {
+		seenDatabaseURL = in.DatabaseURL
+		seenBackend = in.SelectedBackend()
+		return noopStore{}, nil
+	}
+	newHTTPServer = func(s store.Contract, cfg server.Config) *server.Server {
+		seenHost = cfg.Host
+		seenPort = cfg.Port
+		return server.NewWithConfig(s, cfg)
+	}
+	startHTTP = func(_ *server.Server) error { return nil }
+
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdServe(cfg) })
+	if recovered != nil {
+		t.Fatalf("expected successful startup, got panic=%v stderr=%q", recovered, stderr)
+	}
+	if seenDatabaseURL != "postgres://lore:secret@db.internal:5432/lore" {
+		t.Fatalf("DatabaseURL = %q, want postgres://lore:secret@db.internal:5432/lore", seenDatabaseURL)
+	}
+	if seenBackend != store.BackendPostgreSQL {
+		t.Fatalf("SelectedBackend() = %q, want %q", seenBackend, store.BackendPostgreSQL)
+	}
+	if seenHost != "0.0.0.0" {
+		t.Fatalf("Host = %q, want 0.0.0.0", seenHost)
+	}
+	if seenPort != 8443 {
+		t.Fatalf("Port = %d, want 8443 from PORT fallback", seenPort)
 	}
 }
 

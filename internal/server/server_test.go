@@ -202,6 +202,54 @@ func TestHandleHealthUsesBackendNeutralPingContract(t *testing.T) {
 	}
 }
 
+// For the Railway preview, /health is intentionally DB-coupled: a reachable
+// store is healthy, and a failed Ping marks the service unhealthy.
+func TestHealthReturnsOKWhenStorePingSucceeds(t *testing.T) {
+	srv := NewWithConfig(healthOnlyContract{}, Config{Host: "127.0.0.1", Port: 0, Version: "preview"})
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 when store ping succeeds, got %d", rec.Code)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode health body: %v", err)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("status = %v, want ok", body["status"])
+	}
+	if body["version"] != "preview" {
+		t.Fatalf("version = %v, want preview", body["version"])
+	}
+}
+
+func TestHealthReturnsServiceUnavailableWhenStorePingFails(t *testing.T) {
+	srv := NewWithConfig(healthOnlyContract{pingErr: errors.New("postgres unavailable")}, Config{Host: "127.0.0.1", Port: 0, Version: "preview"})
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when store ping fails, got %d", rec.Code)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode health body: %v", err)
+	}
+	if body["status"] != "error" {
+		t.Fatalf("status = %v, want error", body["status"])
+	}
+	if body["reason"] != "store unavailable" {
+		t.Fatalf("reason = %v, want store unavailable", body["reason"])
+	}
+}
+
 func TestAdditionalServerErrorBranches(t *testing.T) {
 	st := newServerTestStore(t)
 	srv := New(st, 0)

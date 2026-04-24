@@ -7,6 +7,7 @@
 - [Install from source (macOS / Linux)](#install-from-source-macos--linux)
 - [Download binary (all platforms)](#download-binary-all-platforms)
 - [First run](#first-run)
+- [Railway preview setup](#railway-preview-setup)
 - [Environment Variables](#environment-variables)
 - [Local PostgreSQL validation](#local-postgresql-validation)
 
@@ -117,28 +118,62 @@ The TUI is a local convenience surface, not the primary hosted/admin workflow.
 
 ---
 
+## Railway preview setup
+
+Use this path only for the first hosted MCP preview on Railway. Keep the existing runtime contract: Railway builds the repo Dockerfile, starts `lore serve`, and points health checks to `GET /health`.
+
+Required env/runtime contract:
+
+- `DATABASE_URL` — REQUIRED. Must point to the Railway-managed PostgreSQL service.
+- `LORE_ENV=staging` — REQUIRED for the hosted preview contract.
+- `LORE_BASE_URL` — REQUIRED. Set this to the public Railway URL (for example `https://<your-service>.up.railway.app`).
+- `LORE_JWT_SECRET` — REQUIRED. Use a persistent 32+ byte secret; staging startup fails if it is missing or shorter.
+- `PORT` — injected by Railway.
+- `LORE_PORT` — optional override; if set, it wins. Railway injects `PORT`; leave `LORE_PORT` unset unless you intentionally need to override the platform port.
+- `LORE_HOST` — optional; staging already defaults to `0.0.0.0`, so only set it if you are overriding host behavior explicitly.
+
+Set `LORE_ENV=staging`, `DATABASE_URL`, `LORE_BASE_URL`, and `LORE_JWT_SECRET` for the hosted preview contract. Bind/base URL behavior must stay explicit: bind on the Railway-visible host/port, but publish the external URL through `LORE_BASE_URL` so callbacks, links, and MCP clients use the public address instead of an internal bind target.
+
+Minimal smoke steps after deploy:
+
+```bash
+curl -i "$LORE_BASE_URL/health"
+```
+
+The response should be `200 OK` only when the PostgreSQL-backed store is reachable. Then run a `/health` and `/mcp` smoke check by initializing any MCP HTTP client against:
+
+```text
+${LORE_BASE_URL}/mcp
+```
+
+The smoke is complete when the MCP client initializes successfully and can perform a minimal memory write/read flow (for example `lore_save` followed by `lore_search` or `lore_get_observation`).
+
+Excluded scope: no web view/dashboard/browser UI work, no TUI work, no agent configurators/plugins, and no production auth or multi-user hardening.
+
+---
+
 ## Environment Variables
 
 | Variable | Description | Default |
 |---|---|---|
 | `LORE_DATA_DIR` | Local SQLite data directory | `~/.lore` |
-| `LORE_PORT` | Preferred HTTP server port | `7437` |
+| `LORE_PORT` | Optional HTTP server port override; leave unset on Railway | unset |
 | `PORT` | Cloud-host fallback port when `LORE_PORT` is unset | unset |
-| `DATABASE_URL` | PostgreSQL selects shared runtime storage; other cases keep SQLite active | unset |
+| `DATABASE_URL` | PostgreSQL selects shared runtime storage; required to be PostgreSQL in staging | unset |
 | `LORE_PROJECT` | Override project detection for MCP | auto |
 | `LORE_ENV` | `local` or `staging` | `local` |
 | `LORE_HOST` | Bind host override | `127.0.0.1` local / `0.0.0.0` staging |
 | `LORE_BASE_URL` | Public base URL for hosted/staging runtime | derived locally |
-| `LORE_JWT_SECRET` | JWT secret for admin/auth | generated per process locally if unset |
+| `LORE_JWT_SECRET` | JWT secret for admin/auth; staging requires 32+ bytes | generated per process locally if unset |
 | `LORE_COOKIE_SECURE` | Override secure cookie behavior | env-dependent |
 | `LORE_GOOGLE_CLIENT_ID` / `LORE_GOOGLE_CLIENT_SECRET` | Optional Google auth | unset |
 | `LORE_GITHUB_CLIENT_ID` / `LORE_GITHUB_CLIENT_SECRET` | Optional GitHub auth | unset |
 
 Backend selection:
 
-- unset `DATABASE_URL` → SQLite
+- unset `DATABASE_URL` → SQLite locally; staging startup fails
 - `postgres://...` or `postgresql://...` → PostgreSQL
-- other valid URLs → SQLite
+- other valid URLs → SQLite locally; staging startup fails
 - malformed `DATABASE_URL` → startup fails before store initialization
 
 ---
