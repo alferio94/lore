@@ -1,10 +1,8 @@
 package tui
 
 import (
-	"errors"
 	"testing"
 
-	"github.com/alferio94/lore/internal/setup"
 	"github.com/alferio94/lore/internal/store"
 	"github.com/alferio94/lore/internal/version"
 )
@@ -80,9 +78,6 @@ func TestNewInitializesModelDefaults(t *testing.T) {
 	}
 	if m.SearchInput.Width != 60 {
 		t.Fatalf("width = %d", m.SearchInput.Width)
-	}
-	if m.SetupSpinner.Spinner.Frames == nil {
-		t.Fatal("spinner was not initialized")
 	}
 }
 
@@ -205,47 +200,6 @@ func TestDataLoadingCommands(t *testing.T) {
 		}
 		if len(loaded.observations) < 2 {
 			t.Fatalf("observations = %d, want >= 2", len(loaded.observations))
-		}
-	})
-}
-
-func TestInstallAgentCommand(t *testing.T) {
-	original := installAgentFn
-	t.Cleanup(func() { installAgentFn = original })
-
-	t.Run("success", func(t *testing.T) {
-		installAgentFn = func(agentName string) (*setup.Result, error) {
-			if agentName != "opencode" {
-				t.Fatalf("agentName = %q", agentName)
-			}
-			return &setup.Result{Agent: agentName, Destination: "/tmp/plugins", Files: 1}, nil
-		}
-
-		msg := installAgent("opencode")()
-		res, ok := msg.(setupInstallMsg)
-		if !ok {
-			t.Fatalf("message type = %T", msg)
-		}
-		if res.err != nil {
-			t.Fatalf("unexpected error: %v", res.err)
-		}
-		if res.result == nil || res.result.Agent != "opencode" {
-			t.Fatalf("unexpected result: %+v", res.result)
-		}
-	})
-
-	t.Run("error", func(t *testing.T) {
-		installAgentFn = func(string) (*setup.Result, error) {
-			return nil, errors.New("install failed")
-		}
-
-		msg := installAgent("claude-code")()
-		res, ok := msg.(setupInstallMsg)
-		if !ok {
-			t.Fatalf("message type = %T", msg)
-		}
-		if res.err == nil || res.err.Error() != "install failed" {
-			t.Fatalf("expected install error, got %v", res.err)
 		}
 	})
 }

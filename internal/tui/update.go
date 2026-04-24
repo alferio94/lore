@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"github.com/alferio94/lore/internal/setup"
-	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -100,31 +98,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SessionDetailScroll = 0
 		return m, nil
 
-	case setupInstallMsg:
-		m.SetupInstalling = false
-		if msg.err != nil {
-			m.SetupDone = true
-			m.SetupError = msg.err.Error()
-			return m, nil
-		}
-		m.SetupResult = msg.result
-		m.SetupError = ""
-		// For claude-code, show allowlist prompt before marking done
-		if msg.result != nil && msg.result.Agent == "claude-code" {
-			m.SetupAllowlistPrompt = true
-			return m, nil
-		}
-		m.SetupDone = true
-		return m, nil
-
-	case spinner.TickMsg:
-		// Only forward spinner ticks when we're actually installing
-		if m.SetupInstalling {
-			var cmd tea.Cmd
-			m.SetupSpinner, cmd = m.SetupSpinner.Update(msg)
-			return m, cmd
-		}
-		return m, nil
 	}
 
 	return m, nil
@@ -153,8 +126,6 @@ func (m Model) handleKeyPress(key string) (tea.Model, tea.Cmd) {
 		return m.handleSessionsKeys(key)
 	case ScreenSessionDetail:
 		return m.handleSessionDetailKeys(key)
-	case ScreenSetup:
-		return m.handleSetupKeys(key)
 	}
 	return m, nil
 }
@@ -162,14 +133,25 @@ func (m Model) handleKeyPress(key string) (tea.Model, tea.Cmd) {
 // ─── Dashboard ───────────────────────────────────────────────────────────────
 
 var dashboardMenuItems = []string{
-	"Search memories",
+	"Search local memories",
 	"Recent observations",
-	"Browse sessions",
-	"Setup agent plugin",
+	"Browse local sessions",
 	"Quit",
 }
 
+func clampDashboardCursor(cursor int) int {
+	if cursor < 0 {
+		return 0
+	}
+	if cursor >= len(dashboardMenuItems) {
+		return len(dashboardMenuItems) - 1
+	}
+	return cursor
+}
+
 func (m Model) handleDashboardKeys(key string) (tea.Model, tea.Cmd) {
+	m.Cursor = clampDashboardCursor(m.Cursor)
+
 	switch key {
 	case "up", "k":
 		if m.Cursor > 0 {
@@ -185,6 +167,8 @@ func (m Model) handleDashboardKeys(key string) (tea.Model, tea.Cmd) {
 		m.PrevScreen = ScreenDashboard
 		m.Screen = ScreenSearch
 		m.Cursor = 0
+		m.SearchQuery = ""
+		m.SearchResults = nil
 		m.SearchInput.SetValue("")
 		m.SearchInput.Focus()
 		return m, nil
@@ -195,11 +179,15 @@ func (m Model) handleDashboardKeys(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleDashboardSelection() (tea.Model, tea.Cmd) {
+	m.Cursor = clampDashboardCursor(m.Cursor)
+
 	switch m.Cursor {
 	case 0: // Search
 		m.PrevScreen = ScreenDashboard
 		m.Screen = ScreenSearch
 		m.Cursor = 0
+		m.SearchQuery = ""
+		m.SearchResults = nil
 		m.SearchInput.SetValue("")
 		m.SearchInput.Focus()
 		return m, nil
@@ -215,18 +203,7 @@ func (m Model) handleDashboardSelection() (tea.Model, tea.Cmd) {
 		m.Cursor = 0
 		m.Scroll = 0
 		return m, loadRecentSessions(m.store)
-	case 3: // Setup
-		m.PrevScreen = ScreenDashboard
-		m.Screen = ScreenSetup
-		m.Cursor = 0
-		m.SetupAgents = setup.SupportedAgents()
-		m.SetupResult = nil
-		m.SetupError = ""
-		m.SetupDone = false
-		m.SetupInstalling = false
-		m.SetupInstallingName = ""
-		return m, nil
-	case 4: // Quit
+	case 3: // Quit
 		return m, tea.Quit
 	}
 	return m, nil
@@ -494,72 +471,6 @@ func (m Model) handleSessionDetailKeys(key string) (tea.Model, tea.Cmd) {
 }
 
 // ─── Setup ───────────────────────────────────────────────────────────────────
-
-func (m Model) handleSetupKeys(key string) (tea.Model, tea.Cmd) {
-	// While installing, block all keys
-	if m.SetupInstalling {
-		return m, nil
-	}
-
-	// Allowlist prompt: y/n
-	if m.SetupAllowlistPrompt {
-		switch key {
-		case "y", "Y":
-			m.SetupAllowlistPrompt = false
-			m.SetupDone = true
-			if err := addClaudeCodeAllowlistFn(); err != nil {
-				m.SetupAllowlistError = err.Error()
-			} else {
-				m.SetupAllowlistApplied = true
-			}
-			return m, nil
-		case "n", "N", "esc":
-			m.SetupAllowlistPrompt = false
-			m.SetupDone = true
-			return m, nil
-		}
-		return m, nil
-	}
-
-	// After install completed, any key goes back
-	if m.SetupDone {
-		switch key {
-		case "esc", "q", "enter":
-			m.Screen = ScreenDashboard
-			m.Cursor = 0
-			m.SetupDone = false
-			m.SetupResult = nil
-			m.SetupError = ""
-			m.SetupAllowlistApplied = false
-			m.SetupAllowlistError = ""
-			return m, loadStats(m.store)
-		}
-		return m, nil
-	}
-
-	switch key {
-	case "up", "k":
-		if m.Cursor > 0 {
-			m.Cursor--
-		}
-	case "down", "j":
-		if m.Cursor < len(m.SetupAgents)-1 {
-			m.Cursor++
-		}
-	case "enter":
-		if len(m.SetupAgents) > 0 && m.Cursor < len(m.SetupAgents) {
-			agent := m.SetupAgents[m.Cursor]
-			m.SetupInstalling = true
-			m.SetupInstallingName = agent.Name
-			return m, tea.Batch(m.SetupSpinner.Tick, installAgent(agent.Name))
-		}
-	case "esc", "q":
-		m.Screen = ScreenDashboard
-		m.Cursor = 0
-		return m, loadStats(m.store)
-	}
-	return m, nil
-}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

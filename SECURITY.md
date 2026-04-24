@@ -18,27 +18,49 @@ Report security issues privately via one of these channels:
 1. **GitHub Security Advisories** (preferred): [Report a vulnerability](https://github.com/alferio94/lore/security/advisories/new)
 2. **Email**: Contact the maintainers directly through the GitHub profile if the advisory flow is unavailable.
 
-### What to Include
+## What to Include
 
-- A clear description of the vulnerability
-- Steps to reproduce
-- The potential impact (data exposure, privilege escalation, denial of service, etc.)
-- Any suggested mitigations you've identified
+- clear description of the vulnerability
+- reproduction steps
+- impact assessment
+- suggested mitigations, if any
 
-### Response Timeline
+## Response Timeline
 
-- **Acknowledgement**: within 48 hours of receiving your report
+- **Acknowledgement**: within 48 hours
 - **Initial assessment**: within 5 business days
-- **Fix target**: within 30 days for critical/high severity, best effort for lower severity
-- **Disclosure**: coordinated with you after a fix is available
+- **Fix target**: within 30 days for critical/high severity, best effort otherwise
+- **Disclosure**: coordinated after a fix is available
 
-### Scope
+## Scope
 
-Lore is a local-first CLI tool that writes to a local SQLite database. The attack surface is intentionally small:
+Lore's primary deployment surface is the shared/cloud runtime, and local SQLite mode remains a supported compatibility path for local installs, tests, and development. Both are in scope for security review:
 
-- **In scope**: privilege escalation, data corruption, path traversal, injection in MCP/HTTP API inputs, memory leaks exposing sensitive data
-- **Out of scope**: issues requiring physical access to the machine where lore is installed, or issues that require the attacker to already have access to the user's home directory
+### Shared/cloud runtime
+
+When operators run `lore serve` as a shared service, important areas include:
+
+- auth and session handling
+- JWT and cookie handling
+- HTTP API input validation
+- `/mcp` exposure and tool authorization
+- PostgreSQL-backed multi-user or shared-runtime risks
+
+### Local mode
+
+When a user runs Lore locally with SQLite, important areas include:
+
+- local data corruption
+- privilege escalation
+- path traversal
+- injection through CLI, MCP, or HTTP inputs
+- accidental disclosure of sensitive content
+
+## Out of Scope
+
+- vulnerabilities that require the reporter to already fully control the operator's machine or home directory
+- issues in third-party vendor configurators or packaged plugins that are not owned by this repository
 
 ## Recognition
 
-We recognize responsible disclosures in the release notes of the version that contains the fix.
+We recognize responsible disclosures in the release notes for the version that contains the fix.

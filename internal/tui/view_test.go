@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alferio94/lore/internal/setup"
 	"github.com/alferio94/lore/internal/store"
 	"github.com/alferio94/lore/internal/version"
 )
@@ -104,36 +103,6 @@ func TestViewSearchResultsAndScrollIndicator(t *testing.T) {
 	}
 }
 
-func TestViewSetupBranches(t *testing.T) {
-	m := New(nil, "")
-	m.Screen = ScreenSetup
-
-	m.SetupInstalling = true
-	m.SetupInstallingName = "opencode"
-	out := m.viewSetup()
-	if !strings.Contains(out, "Installing opencode plugin") {
-		t.Fatal("installing state should render progress line")
-	}
-
-	m.SetupInstalling = false
-	m.SetupDone = true
-	m.SetupResult = &setup.Result{Agent: "opencode", Destination: "/tmp/plugins", Files: 2}
-	out = m.viewSetup()
-	if !strings.Contains(out, "Installed opencode plugin") {
-		t.Fatal("success state should render install result")
-	}
-	if !strings.Contains(out, "Next Steps") {
-		t.Fatal("success state should render post-install instructions")
-	}
-
-	m.SetupResult = nil
-	m.SetupError = "permission denied"
-	out = m.viewSetup()
-	if !strings.Contains(out, "Installation failed") {
-		t.Fatal("error state should render failure message")
-	}
-}
-
 func TestViewDashboardSearchAndRecent(t *testing.T) {
 	m := New(nil, "")
 	m.Cursor = 1
@@ -147,6 +116,12 @@ func TestViewDashboardSearchAndRecent(t *testing.T) {
 	out := m.viewDashboard()
 	if !strings.Contains(out, "lore") || !strings.Contains(out, "Actions") {
 		t.Fatal("dashboard should include header and actions")
+	}
+	if !strings.Contains(out, "Local memory browser") {
+		t.Fatal("dashboard should describe the TUI as a local browsing surface")
+	}
+	if strings.Contains(out, "Setup agent plugin") {
+		t.Fatal("dashboard should not advertise setup actions")
 	}
 	if !strings.Contains(out, "...and 1 more projects") {
 		t.Fatal("dashboard should show overflow projects indicator")
@@ -174,8 +149,11 @@ func TestViewDashboardSearchAndRecent(t *testing.T) {
 
 	m.Screen = ScreenSearch
 	out = m.viewSearch()
-	if !strings.Contains(out, "Search Memories") {
+	if !strings.Contains(out, "Search Local Memories") {
 		t.Fatal("search view should render title")
+	}
+	if !strings.Contains(out, "local SQLite/dev store") {
+		t.Fatal("search view should frame the TUI as a local-only surface")
 	}
 
 	m.Height = 14
@@ -321,7 +299,6 @@ func TestViewRouterCoversAllScreens(t *testing.T) {
 	m.Sessions = []store.SessionSummary{{ID: "s1", Project: "engram", StartedAt: "now", ObservationCount: 1}}
 	m.SelectedSessionIdx = 0
 	m.SessionObservations = []store.Observation{{ID: 1, Type: "bugfix", Title: "t", Content: "c", CreatedAt: "now"}}
-	m.SetupAgents = []setup.Agent{{Name: "opencode", Description: "OpenCode", InstallDir: "/tmp"}}
 	m.Height = 20
 
 	tests := []struct {
@@ -329,14 +306,13 @@ func TestViewRouterCoversAllScreens(t *testing.T) {
 		want   string
 	}{
 		{screen: ScreenDashboard, want: "Actions"},
-		{screen: ScreenSearch, want: "Search Memories"},
+		{screen: ScreenSearch, want: "Search Local Memories"},
 		{screen: ScreenSearchResults, want: "Search:"},
 		{screen: ScreenRecent, want: "Recent Observations"},
 		{screen: ScreenObservationDetail, want: "Observation #"},
 		{screen: ScreenTimeline, want: "Timeline"},
 		{screen: ScreenSessions, want: "Sessions"},
 		{screen: ScreenSessionDetail, want: "Session:"},
-		{screen: ScreenSetup, want: "Setup"},
 	}
 
 	for _, tt := range tests {
@@ -346,93 +322,4 @@ func TestViewRouterCoversAllScreens(t *testing.T) {
 			t.Fatalf("screen %v output missing %q", tt.screen, tt.want)
 		}
 	}
-}
-
-func TestViewSetupRemainingBranches(t *testing.T) {
-	m := New(nil, "")
-	m.Screen = ScreenSetup
-	m.SetupAgents = []setup.Agent{
-		{Name: "claude-code", Description: "Claude Code", InstallDir: "/tmp/claude"},
-		{Name: "opencode", Description: "OpenCode", InstallDir: "/tmp/opencode"},
-	}
-
-	out := m.viewSetup()
-	if !strings.Contains(out, "Select an agent to set up") || !strings.Contains(out, "Install to") {
-		t.Fatal("setup selection mode should render options and install paths")
-	}
-
-	m.SetupInstalling = true
-	m.SetupInstallingName = "claude-code"
-	out = m.viewSetup()
-	if !strings.Contains(out, "Running claude plugin marketplace add + install") {
-		t.Fatal("setup installing should render claude-code specific progress text")
-	}
-
-	m.SetupInstalling = false
-	m.SetupDone = true
-	m.SetupError = ""
-	m.SetupResult = &setup.Result{Agent: "claude-code", Destination: "/tmp/claude", Files: 0}
-	out = m.viewSetup()
-	if !strings.Contains(out, "Verify with: claude plugin list") {
-		t.Fatal("setup success for claude-code should render next steps")
-	}
-
-	m.SetupResult = nil
-	m.SetupError = ""
-	out = m.viewSetup()
-	if !strings.Contains(out, "enter/esc back to dashboard") {
-		t.Fatal("setup done without result/error should still render return help")
-	}
-}
-
-func TestViewSetupAllowlistPrompt(t *testing.T) {
-	t.Run("renders allowlist prompt", func(t *testing.T) {
-		m := New(nil, "")
-		m.Screen = ScreenSetup
-		m.SetupAllowlistPrompt = true
-		m.SetupResult = &setup.Result{Agent: "claude-code", Destination: "claude plugin system"}
-
-		out := m.viewSetup()
-		if !strings.Contains(out, "Installed claude-code plugin") {
-			t.Fatal("prompt should show install success")
-		}
-		if !strings.Contains(out, "Permissions Allowlist") {
-			t.Fatal("prompt should show allowlist heading")
-		}
-		if !strings.Contains(out, "settings.json") {
-			t.Fatal("prompt should mention settings.json")
-		}
-		if !strings.Contains(out, "[y] Yes") || !strings.Contains(out, "[n] No") {
-			t.Fatal("prompt should show y/n options")
-		}
-	})
-
-	t.Run("renders applied state", func(t *testing.T) {
-		m := New(nil, "")
-		m.Screen = ScreenSetup
-		m.SetupDone = true
-		m.SetupResult = &setup.Result{Agent: "claude-code", Destination: "claude plugin system"}
-		m.SetupAllowlistApplied = true
-
-		out := m.viewSetup()
-		if !strings.Contains(out, "tools added to allowlist") {
-			t.Fatal("should show allowlist success")
-		}
-	})
-
-	t.Run("renders error state", func(t *testing.T) {
-		m := New(nil, "")
-		m.Screen = ScreenSetup
-		m.SetupDone = true
-		m.SetupResult = &setup.Result{Agent: "claude-code", Destination: "claude plugin system"}
-		m.SetupAllowlistError = "permission denied"
-
-		out := m.viewSetup()
-		if !strings.Contains(out, "Allowlist update failed") {
-			t.Fatal("should show allowlist error")
-		}
-		if !strings.Contains(out, "permission denied") {
-			t.Fatal("should show error message")
-		}
-	})
 }

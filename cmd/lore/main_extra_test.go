@@ -16,7 +16,6 @@ import (
 	"github.com/alferio94/lore/internal/admin"
 	"github.com/alferio94/lore/internal/mcp"
 	engramsrv "github.com/alferio94/lore/internal/server"
-	"github.com/alferio94/lore/internal/setup"
 	"github.com/alferio94/lore/internal/store"
 	engramsync "github.com/alferio94/lore/internal/sync"
 	"github.com/alferio94/lore/internal/tui"
@@ -88,9 +87,6 @@ func stubRuntimeHooks(t *testing.T) {
 	oldNewTUIModel := newTUIModel
 	oldNewTeaProgram := newTeaProgram
 	oldRunTeaProgram := runTeaProgram
-	oldSetupSupportedAgents := setupSupportedAgents
-	oldSetupInstallAgent := setupInstallAgent
-	oldScanInputLine := scanInputLine
 	oldStoreSearch := storeSearch
 	oldStoreAddObservation := storeAddObservation
 	oldStoreTimeline := storeTimeline
@@ -117,9 +113,6 @@ func stubRuntimeHooks(t *testing.T) {
 	newTUIModel = func(_ store.Contract) tui.Model { return tui.New(nil, "") }
 	newTeaProgram = func(tea.Model, ...tea.ProgramOption) *tea.Program { return &tea.Program{} }
 	runTeaProgram = func(*tea.Program) (tea.Model, error) { return nil, nil }
-	setupSupportedAgents = setup.SupportedAgents
-	setupInstallAgent = setup.Install
-	scanInputLine = fmt.Scanln
 	storeSearch = func(s store.Contract, query string, opts store.SearchOptions) ([]store.SearchResult, error) {
 		return s.Search(query, opts)
 	}
@@ -157,9 +150,6 @@ func stubRuntimeHooks(t *testing.T) {
 		newTUIModel = oldNewTUIModel
 		newTeaProgram = oldNewTeaProgram
 		runTeaProgram = oldRunTeaProgram
-		setupSupportedAgents = oldSetupSupportedAgents
-		setupInstallAgent = oldSetupInstallAgent
-		scanInputLine = oldScanInputLine
 		storeSearch = oldStoreSearch
 		storeAddObservation = oldStoreAddObservation
 		storeTimeline = oldStoreTimeline
@@ -297,55 +287,47 @@ func TestCmdSetupDirectAndInteractive(t *testing.T) {
 	stubRuntimeHooks(t)
 	stubExitWithPanic(t)
 
-	setupInstallAgent = func(agent string) (*setup.Result, error) {
-		if agent == "broken" {
-			return nil, errors.New("install failed")
-		}
-		return &setup.Result{Agent: agent, Destination: "/tmp/dest", Files: 2}, nil
-	}
-
 	withArgs(t, "lore", "setup", "codex")
 	out, errOut, recovered := captureOutputAndRecover(t, func() { cmdSetup() })
 	if recovered != nil || errOut != "" {
 		t.Fatalf("direct setup should succeed, panic=%v stderr=%q", recovered, errOut)
 	}
-	if !strings.Contains(out, "Installed codex plugin") {
+	if !strings.Contains(strings.ToLower(out), "deprecated") || !strings.Contains(out, "codex") {
 		t.Fatalf("unexpected direct setup output: %q", out)
-	}
-
-	withArgs(t, "lore", "setup", "broken")
-	_, errOut, recovered = captureOutputAndRecover(t, func() { cmdSetup() })
-	if _, ok := recovered.(exitCode); !ok || !strings.Contains(errOut, "install failed") {
-		t.Fatalf("expected direct setup fatal, panic=%v stderr=%q", recovered, errOut)
-	}
-
-	setupSupportedAgents = func() []setup.Agent {
-		return []setup.Agent{{Name: "opencode", Description: "OpenCode", InstallDir: "/tmp/opencode"}}
-	}
-	scanInputLine = func(a ...any) (int, error) {
-		p := a[0].(*string)
-		*p = "1"
-		return 1, nil
 	}
 
 	withArgs(t, "lore", "setup")
 	out, errOut, recovered = captureOutputAndRecover(t, func() { cmdSetup() })
 	if recovered != nil || errOut != "" {
-		t.Fatalf("interactive setup should succeed, panic=%v stderr=%q", recovered, errOut)
+		t.Fatalf("setup without agent should succeed, panic=%v stderr=%q", recovered, errOut)
 	}
-	if !strings.Contains(out, "Installing opencode plugin") {
+	if !strings.Contains(strings.ToLower(out), "deprecated") || strings.Contains(out, "Which agent do you want to set up?") {
 		t.Fatalf("unexpected interactive setup output: %q", out)
 	}
+}
 
-	scanInputLine = func(a ...any) (int, error) {
-		p := a[0].(*string)
-		*p = "99"
-		return 1, nil
+func TestCmdSetupDoesNotCreateFilesInWorkingDirectory(t *testing.T) {
+	stubRuntimeHooks(t)
+	stubExitWithPanic(t)
+
+	workDir := t.TempDir()
+	withCwd(t, workDir)
+	withArgs(t, "lore", "setup", "codex")
+
+	stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdSetup() })
+	if recovered != nil || stderr != "" {
+		t.Fatalf("setup should remain non-fatal, panic=%v stderr=%q", recovered, stderr)
 	}
-	withArgs(t, "lore", "setup")
-	_, errOut, recovered = captureOutputAndRecover(t, func() { cmdSetup() })
-	if _, ok := recovered.(exitCode); !ok || !strings.Contains(errOut, "Invalid choice") {
-		t.Fatalf("expected invalid choice exit, panic=%v stderr=%q", recovered, errOut)
+	if !strings.Contains(strings.ToLower(stdout), "no file writes") {
+		t.Fatalf("expected explicit no-side-effect output, got %q", stdout)
+	}
+
+	entries, err := os.ReadDir(workDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("setup should not create working-directory files, found %d entries", len(entries))
 	}
 }
 
@@ -528,10 +510,6 @@ func TestMainDispatchRemainingCommands(t *testing.T) {
 		t.Fatalf("write import file: %v", err)
 	}
 
-	setupInstallAgent = func(agent string) (*setup.Result, error) {
-		return &setup.Result{Agent: agent, Destination: "/tmp/dest", Files: 1}, nil
-	}
-
 	tests := []struct {
 		name string
 		args []string
@@ -695,24 +673,12 @@ func TestCmdSetupHyphenArgFallsBackToInteractive(t *testing.T) {
 	stubRuntimeHooks(t)
 	stubExitWithPanic(t)
 
-	setupSupportedAgents = func() []setup.Agent {
-		return []setup.Agent{{Name: "codex", Description: "Codex", InstallDir: "/tmp/codex"}}
-	}
-	setupInstallAgent = func(agent string) (*setup.Result, error) {
-		return &setup.Result{Agent: agent, Destination: "/tmp/codex", Files: 1}, nil
-	}
-	scanInputLine = func(a ...any) (int, error) {
-		p := a[0].(*string)
-		*p = "1"
-		return 1, nil
-	}
-
 	withArgs(t, "lore", "setup", "--not-an-agent")
 	stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdSetup() })
 	if recovered != nil || stderr != "" {
-		t.Fatalf("setup interactive fallback failed: panic=%v stderr=%q", recovered, stderr)
+		t.Fatalf("setup fallback failed: panic=%v stderr=%q", recovered, stderr)
 	}
-	if !strings.Contains(stdout, "Which agent do you want to set up?") || !strings.Contains(stdout, "Installing codex plugin") {
+	if !strings.Contains(strings.ToLower(stdout), "deprecated") || strings.Contains(stdout, "Which agent do you want to set up?") {
 		t.Fatalf("unexpected setup output: %q", stdout)
 	}
 }
@@ -918,22 +884,15 @@ func TestCommandErrorSeamsAndUncoveredBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("setup interactive install error", func(t *testing.T) {
-		setupSupportedAgents = func() []setup.Agent {
-			return []setup.Agent{{Name: "codex", Description: "Codex", InstallDir: "/tmp/codex"}}
-		}
-		scanInputLine = func(a ...any) (int, error) {
-			p := a[0].(*string)
-			*p = "1"
-			return 1, nil
-		}
-		setupInstallAgent = func(string) (*setup.Result, error) {
-			return nil, errors.New("forced setup error")
-		}
-
+	t.Run("setup deprecation stays non-fatal", func(t *testing.T) {
 		withArgs(t, "lore", "setup")
-		_, stderr, recovered := captureOutputAndRecover(t, func() { cmdSetup() })
-		assertFatal(t, stderr, recovered, "forced setup error")
+		stdout, stderr, recovered := captureOutputAndRecover(t, func() { cmdSetup() })
+		if recovered != nil || stderr != "" {
+			t.Fatalf("expected non-fatal setup deprecation, panic=%v stderr=%q", recovered, stderr)
+		}
+		if !strings.Contains(strings.ToLower(stdout), "deprecated") {
+			t.Fatalf("expected deprecation output, got %q", stdout)
+		}
 	})
 }
 

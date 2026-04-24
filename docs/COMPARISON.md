@@ -2,41 +2,41 @@
 
 # Why Not claude-mem?
 
-[claude-mem](https://github.com/thedotmack/claude-mem) is a great project (28K+ stars!) that inspired Engram. But we made fundamentally different design decisions:
+[claude-mem](https://github.com/thedotmack/claude-mem) is an influential project, but Lore is optimized for a different product shape.
 
-| | **Engram** | **claude-mem** |
+| | **Lore** | **claude-mem** |
 |---|---|---|
-| **Language** | Go (single binary, zero runtime deps) | TypeScript + Python (needs Node.js, Bun, uv) |
-| **Agent lock-in** | None. Works with any MCP agent | Claude Code only (uses Claude plugin hooks) |
-| **Search** | SQLite FTS5 (built-in, zero setup) | ChromaDB vector database (separate process) |
-| **What gets stored** | Agent-curated summaries only | Raw tool calls + AI compression |
-| **Compression** | Agent does it inline (it already has the LLM) | Separate Claude API calls via agent-sdk |
-| **Dependencies** | `go install` and done | Node.js 18+, Bun, uv, Python, ChromaDB |
-| **Processes** | One binary (or none — MCP stdio) | Worker service on port 37777 + ChromaDB |
-| **Database** | Single `~/.engram/engram.db` file | SQLite + ChromaDB (two storage systems) |
-| **Web UI** | Terminal TUI (`engram tui`) | Web viewer on localhost:37777 |
-| **Privacy** | `<private>` tags stripped at 2 layers | `<private>` tags stripped |
-| **Auto-capture** | No. Agent decides what matters | Yes. Captures all tool calls then compresses |
-| **License** | MIT | AGPL-3.0 |
+| **Primary surface** | Shared runtime + MCP + browser admin | Claude Code-oriented local plugin flow |
+| **Agent lock-in** | None; any MCP or HTTP client | Claude Code-centered |
+| **Storage** | PostgreSQL for shared runtime, SQLite for local mode | SQLite + ChromaDB |
+| **Deployment story** | Single Go binary that can run locally or as a hosted service | Local worker/service stack |
+| **Local UI** | Terminal UI for local compatibility | Web viewer on localhost |
+| **What gets stored** | Agent-curated summaries | Raw tool calls + later compression |
+| **Compression** | Done by the agent inline | Separate AI compression pass |
+| **Dependencies** | One Go binary | Multiple runtimes and services |
+| **Runtime contract** | MCP stdio, `/mcp`, HTTP APIs | Plugin/system-specific |
 
-## The Core Philosophy Difference
+## Product Philosophy Difference
 
-**claude-mem** captures *everything* and then compresses it with AI. This means:
+Lore is built around a shared runtime boundary:
 
-- Extra API calls for compression (costs money, adds latency)
-- Raw tool calls pollute search results until compressed
-- Requires a worker process, ChromaDB, and multiple runtimes
-- Locked to Claude Code's plugin system
+- a hosted or shared service can expose HTTP APIs and `/mcp`
+- the same binary can still run locally with SQLite
+- agents and external configurators consume stable Lore-owned primitives instead of repo-packaged vendor installers
 
-**Engram** lets the agent decide what's worth remembering. The agent already has the LLM, the context, and understands what just happened. Why run a separate compression pipeline?
+SQLite and `lore tui` remain useful, but they are positioned as local convenience surfaces rather than the full product identity.
 
-- `mem_save` after a bugfix: *"Fixed N+1 query — added eager loading in UserList"*
-- `mem_session_summary` at session end: structured Goal/Discoveries/Accomplished/Files
-- No noise, no compression step, no extra API calls
-- Works with ANY agent via standard MCP
+By contrast, claude-mem is strongly shaped around Claude-specific plugin workflows and an always-on local capture/compression model.
 
-**The result**: cleaner data, faster search, no infrastructure overhead, agent-agnostic.
+## Why this matters
+
+This tradeoff gives Lore:
+
+- one runtime contract for browser admins, MCP clients, and HTTP integrations
+- simpler ownership boundaries for external configurators
+- a path to multi-user/shared deployments without changing products
+- a local mode that still works for development, tests, and demos
 
 ---
 
-**Inspired by [claude-mem](https://github.com/thedotmack/claude-mem)** — but agent-agnostic, simpler, and built different.
+Inspired by [claude-mem](https://github.com/thedotmack/claude-mem), but optimized for a cloud-first, agent-agnostic runtime model.

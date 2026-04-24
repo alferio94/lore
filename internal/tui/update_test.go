@@ -4,10 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/alferio94/lore/internal/setup"
 	"github.com/alferio94/lore/internal/store"
 	"github.com/alferio94/lore/internal/version"
-	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -116,47 +114,32 @@ func TestUpdateObservationDetailEscRefreshesPrevScreen(t *testing.T) {
 	}
 }
 
-func TestUpdateSetupFlowAndSpinnerTick(t *testing.T) {
-	fx := newTestFixture(t)
-	m := New(fx.store, "")
-	m.Screen = ScreenSetup
-	m.SetupAgents = []setup.Agent{{Name: "opencode", Description: "OpenCode", InstallDir: "/tmp"}}
-	m.SetupDone = true
-	m.SetupResult = &setup.Result{Agent: "opencode", Destination: "/tmp", Files: 1}
-
-	updatedModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated := updatedModel.(Model)
-	if updated.Screen != ScreenDashboard {
-		t.Fatalf("screen = %v, want %v", updated.Screen, ScreenDashboard)
-	}
-	if updated.SetupDone {
-		t.Fatal("setup done should reset after leaving setup screen")
-	}
-	if cmd == nil {
-		t.Fatal("expected stats refresh command when leaving setup")
-	}
-
-	updated.SetupInstalling = false
-	_, tickCmd := updated.Update(spinner.TickMsg{})
-	if tickCmd != nil {
-		t.Fatal("spinner tick should be ignored when not installing")
-	}
-
-	updated.SetupInstalling = true
-	_, tickCmd = updated.Update(spinner.TickMsg{})
-	if tickCmd == nil {
-		t.Fatal("spinner tick should be forwarded while installing")
-	}
-}
-
 func TestHandleDashboardAndSearchKeyPaths(t *testing.T) {
 	fx := newTestFixture(t)
 	m := New(fx.store, "")
+	m.SearchQuery = "stale"
+	m.SearchResults = []store.SearchResult{{Observation: store.Observation{ID: 42}}}
 
 	updatedModel, _ := m.handleDashboardKeys("s")
 	updated := updatedModel.(Model)
 	if updated.Screen != ScreenSearch || !updated.SearchInput.Focused() {
 		t.Fatal("dashboard shortcut should open focused search")
+	}
+	if updated.SearchQuery != "" || len(updated.SearchResults) != 0 {
+		t.Fatal("dashboard shortcut should clear stale search state for deterministic navigation")
+	}
+
+	m = New(fx.store, "")
+	m.SearchQuery = "stale"
+	m.SearchResults = []store.SearchResult{{Observation: store.Observation{ID: 99}}}
+	m.Cursor = 0
+	updatedModel, _ = m.handleDashboardSelection()
+	updated = updatedModel.(Model)
+	if updated.Screen != ScreenSearch || !updated.SearchInput.Focused() {
+		t.Fatal("search selection should open focused search")
+	}
+	if updated.SearchQuery != "" || len(updated.SearchResults) != 0 {
+		t.Fatal("search selection should clear stale search state for deterministic navigation")
 	}
 
 	m = New(fx.store, "")
@@ -183,13 +166,9 @@ func TestHandleDashboardAndSearchKeyPaths(t *testing.T) {
 
 	m = New(fx.store, "")
 	m.Cursor = 3
-	updatedModel, cmd = m.handleDashboardSelection()
-	updated = updatedModel.(Model)
-	if updated.Screen != ScreenSetup || len(updated.SetupAgents) == 0 {
-		t.Fatal("setup selection should initialize setup screen")
-	}
-	if cmd != nil {
-		t.Fatal("setup selection should not return command")
+	_, cmd = m.handleDashboardSelection()
+	if cmd == nil {
+		t.Fatal("quit selection should return quit command")
 	}
 
 	m = New(nil, "")
@@ -419,21 +398,6 @@ func TestUpdateDataMessageBranches(t *testing.T) {
 		t.Fatal("session observations message should open session detail and reset cursor/scroll")
 	}
 
-	updated.SetupInstalling = true
-	updatedModel, _ = updated.Update(setupInstallMsg{err: errors.New("setup err")})
-	updated = updatedModel.(Model)
-	if updated.SetupInstalling || !updated.SetupDone || updated.SetupError != "setup err" {
-		t.Fatal("setup error should end install and surface setup error")
-	}
-
-	updated.SetupInstalling = true
-	setupRes := &setup.Result{Agent: "opencode", Destination: "/tmp", Files: 2}
-	updatedModel, _ = updated.Update(setupInstallMsg{result: setupRes})
-	updated = updatedModel.(Model)
-	if updated.SetupInstalling || !updated.SetupDone || updated.SetupResult == nil || updated.SetupError != "" {
-		t.Fatal("setup success should persist result and clear errors")
-	}
-
 	unchangedModel, cmd := updated.Update(struct{ X int }{X: 1})
 	if cmd != nil {
 		t.Fatal("unknown message should not return command")
@@ -456,7 +420,6 @@ func TestHandleKeyPressRouterAndClearsError(t *testing.T) {
 		ScreenTimeline,
 		ScreenSessions,
 		ScreenSessionDetail,
-		ScreenSetup,
 	} {
 		m.Screen = screen
 		m.ErrorMsg = "old error"
@@ -483,7 +446,7 @@ func TestHandleDashboardKeysAndSelectionRemainingBranches(t *testing.T) {
 		t.Fatal("cursor should stay at bottom boundary")
 	}
 
-	m.Cursor = 4
+	m.Cursor = len(dashboardMenuItems) - 1
 	_, cmd := m.handleDashboardKeys(" ")
 	if cmd == nil {
 		t.Fatal("space on quit item should return quit command")
@@ -501,16 +464,16 @@ func TestHandleDashboardKeysAndSelectionRemainingBranches(t *testing.T) {
 		t.Fatal("cursor 0 selection should open search")
 	}
 
-	m.Cursor = 4
+	m.Cursor = len(dashboardMenuItems) - 1
 	_, cmd = m.handleDashboardSelection()
 	if cmd == nil {
-		t.Fatal("cursor 4 selection should quit")
+		t.Fatal("last dashboard selection should quit")
 	}
 
 	m.Cursor = 99
 	updatedModel, cmd = m.handleDashboardSelection()
-	if updatedModel.(Model).Cursor != 99 || cmd != nil {
-		t.Fatal("out-of-range dashboard selection should be no-op")
+	if updatedModel.(Model).Cursor != len(dashboardMenuItems)-1 || cmd == nil {
+		t.Fatal("out-of-range dashboard selection should clamp to quit")
 	}
 }
 
@@ -654,7 +617,7 @@ func TestSearchInputClearedOnEnterFromDashboard(t *testing.T) {
 	}
 }
 
-func TestHandleSessionsAndSetupRemainingBranches(t *testing.T) {
+func TestHandleSessionsRemainingBranches(t *testing.T) {
 	fx := newTestFixture(t)
 	m := New(fx.store, "")
 	m.Height = 12
@@ -676,59 +639,6 @@ func TestHandleSessionsAndSetupRemainingBranches(t *testing.T) {
 	_, cmd := m.handleSessionsKeys("enter")
 	if cmd != nil {
 		t.Fatal("sessions enter with no sessions should not return command")
-	}
-
-	m = New(fx.store, "")
-	m.Screen = ScreenSetup
-	m.SetupInstalling = true
-	updatedModel, cmd = m.handleSetupKeys("esc")
-	updated := updatedModel.(Model)
-	if updated.Screen != ScreenSetup || cmd != nil {
-		t.Fatal("setup should ignore keys while installing")
-	}
-
-	m.SetupInstalling = false
-	m.SetupDone = true
-	updatedModel, cmd = m.handleSetupKeys("x")
-	updated = updatedModel.(Model)
-	if updated.Screen != ScreenSetup || cmd != nil {
-		t.Fatal("setup done with non-exit key should do nothing")
-	}
-
-	m.SetupDone = false
-	m.SetupAgents = []setup.Agent{{Name: "opencode"}, {Name: "claude-code"}}
-	m.Cursor = 0
-	updatedModel, _ = m.handleSetupKeys("up")
-	if updatedModel.(Model).Cursor != 0 {
-		t.Fatal("setup up at top should stay at zero")
-	}
-	updatedModel, _ = m.handleSetupKeys("down")
-	if updatedModel.(Model).Cursor != 1 {
-		t.Fatal("setup down should move cursor")
-	}
-	updatedModel, _ = updatedModel.(Model).handleSetupKeys("up")
-	if updatedModel.(Model).Cursor != 0 {
-		t.Fatal("setup up with cursor>0 should decrement cursor")
-	}
-
-	original := installAgentFn
-	t.Cleanup(func() { installAgentFn = original })
-	installAgentFn = func(name string) (*setup.Result, error) {
-		return &setup.Result{Agent: name, Destination: "/tmp", Files: 1}, nil
-	}
-
-	m.Cursor = 1
-	updatedModel, cmd = m.handleSetupKeys("enter")
-	updated = updatedModel.(Model)
-	if !updated.SetupInstalling || updated.SetupInstallingName != "claude-code" || cmd == nil {
-		t.Fatal("setup enter with valid agent should start install and return batch command")
-	}
-
-	m.SetupInstalling = false
-	m.SetupAgents = nil
-	_, cmd = m.handleSetupKeys("enter")
-	if cmd != nil {
-		t.Fatal("setup enter with no agents should not return command")
 	}
 }
 
@@ -828,12 +738,12 @@ func TestAdditionalKeyAliasAndBoundaryBranches(t *testing.T) {
 		t.Fatal("session detail q should go back to sessions and refresh")
 	}
 
-	// Setup q/esc branch with no install state
+	// Dashboard deterministic clamp for stale cursor values
 	m = New(fx.store, "")
-	m.Screen = ScreenSetup
-	updatedModel, cmd = m.handleSetupKeys("q")
-	if updatedModel.(Model).Screen != ScreenDashboard || cmd == nil {
-		t.Fatal("setup q should return dashboard and refresh stats")
+	m.Cursor = len(dashboardMenuItems) + 3
+	updatedModel, cmd = m.handleDashboardKeys("enter")
+	if updatedModel.(Model).Cursor != len(dashboardMenuItems)-1 || cmd == nil {
+		t.Fatal("dashboard enter should clamp oversized cursor to quit")
 	}
 }
 
@@ -903,189 +813,4 @@ func TestNavigationScrollAndSelectionBranches(t *testing.T) {
 	if updated.Cursor != 1 || updated.SessionDetailScroll != 1 {
 		t.Fatalf("session detail up should update cursor/detail scroll, got %d/%d", updated.Cursor, updated.SessionDetailScroll)
 	}
-}
-
-func TestSetupAllowlistPromptFlow(t *testing.T) {
-	t.Run("claude-code install shows allowlist prompt", func(t *testing.T) {
-		fx := newTestFixture(t)
-		m := New(fx.store, "")
-		m.Screen = ScreenSetup
-		m.SetupInstalling = true
-
-		result := &setup.Result{Agent: "claude-code", Destination: "claude plugin system", Files: 0}
-		updatedModel, _ := m.Update(setupInstallMsg{result: result})
-		updated := updatedModel.(Model)
-
-		if updated.SetupDone {
-			t.Fatal("claude-code install should NOT set SetupDone yet")
-		}
-		if !updated.SetupAllowlistPrompt {
-			t.Fatal("claude-code install should set SetupAllowlistPrompt")
-		}
-		if updated.SetupResult == nil || updated.SetupResult.Agent != "claude-code" {
-			t.Fatal("result should be set")
-		}
-	})
-
-	t.Run("non-claude-code install skips allowlist prompt", func(t *testing.T) {
-		fx := newTestFixture(t)
-		m := New(fx.store, "")
-		m.Screen = ScreenSetup
-		m.SetupInstalling = true
-
-		result := &setup.Result{Agent: "opencode", Destination: "/tmp", Files: 1}
-		updatedModel, _ := m.Update(setupInstallMsg{result: result})
-		updated := updatedModel.(Model)
-
-		if !updated.SetupDone {
-			t.Fatal("opencode install should set SetupDone directly")
-		}
-		if updated.SetupAllowlistPrompt {
-			t.Fatal("opencode install should NOT show allowlist prompt")
-		}
-	})
-
-	t.Run("pressing y applies allowlist", func(t *testing.T) {
-		oldFn := addClaudeCodeAllowlistFn
-		t.Cleanup(func() { addClaudeCodeAllowlistFn = oldFn })
-
-		called := false
-		addClaudeCodeAllowlistFn = func() error {
-			called = true
-			return nil
-		}
-
-		m := New(nil, "")
-		m.Screen = ScreenSetup
-		m.SetupAllowlistPrompt = true
-		m.SetupResult = &setup.Result{Agent: "claude-code"}
-
-		updatedModel, _ := m.handleSetupKeys("y")
-		updated := updatedModel.(Model)
-
-		if !called {
-			t.Fatal("pressing y should call addClaudeCodeAllowlistFn")
-		}
-		if !updated.SetupDone {
-			t.Fatal("pressing y should set SetupDone")
-		}
-		if updated.SetupAllowlistPrompt {
-			t.Fatal("pressing y should clear allowlist prompt")
-		}
-		if !updated.SetupAllowlistApplied {
-			t.Fatal("pressing y should set SetupAllowlistApplied")
-		}
-	})
-
-	t.Run("pressing y with error shows error", func(t *testing.T) {
-		oldFn := addClaudeCodeAllowlistFn
-		t.Cleanup(func() { addClaudeCodeAllowlistFn = oldFn })
-
-		addClaudeCodeAllowlistFn = func() error {
-			return errors.New("permission denied")
-		}
-
-		m := New(nil, "")
-		m.Screen = ScreenSetup
-		m.SetupAllowlistPrompt = true
-		m.SetupResult = &setup.Result{Agent: "claude-code"}
-
-		updatedModel, _ := m.handleSetupKeys("y")
-		updated := updatedModel.(Model)
-
-		if !updated.SetupDone {
-			t.Fatal("pressing y with error should still set SetupDone")
-		}
-		if updated.SetupAllowlistApplied {
-			t.Fatal("should not be applied on error")
-		}
-		if updated.SetupAllowlistError != "permission denied" {
-			t.Fatalf("expected error message, got %q", updated.SetupAllowlistError)
-		}
-	})
-
-	t.Run("pressing n skips allowlist", func(t *testing.T) {
-		oldFn := addClaudeCodeAllowlistFn
-		t.Cleanup(func() { addClaudeCodeAllowlistFn = oldFn })
-
-		called := false
-		addClaudeCodeAllowlistFn = func() error {
-			called = true
-			return nil
-		}
-
-		m := New(nil, "")
-		m.Screen = ScreenSetup
-		m.SetupAllowlistPrompt = true
-		m.SetupResult = &setup.Result{Agent: "claude-code"}
-
-		updatedModel, _ := m.handleSetupKeys("n")
-		updated := updatedModel.(Model)
-
-		if called {
-			t.Fatal("pressing n should NOT call addClaudeCodeAllowlistFn")
-		}
-		if !updated.SetupDone {
-			t.Fatal("pressing n should set SetupDone")
-		}
-		if updated.SetupAllowlistPrompt {
-			t.Fatal("pressing n should clear allowlist prompt")
-		}
-	})
-
-	t.Run("pressing esc skips allowlist", func(t *testing.T) {
-		m := New(nil, "")
-		m.Screen = ScreenSetup
-		m.SetupAllowlistPrompt = true
-		m.SetupResult = &setup.Result{Agent: "claude-code"}
-
-		updatedModel, _ := m.handleSetupKeys("esc")
-		updated := updatedModel.(Model)
-
-		if !updated.SetupDone {
-			t.Fatal("pressing esc should set SetupDone")
-		}
-		if updated.SetupAllowlistPrompt {
-			t.Fatal("pressing esc should clear allowlist prompt")
-		}
-	})
-
-	t.Run("other keys during prompt are ignored", func(t *testing.T) {
-		m := New(nil, "")
-		m.Screen = ScreenSetup
-		m.SetupAllowlistPrompt = true
-		m.SetupResult = &setup.Result{Agent: "claude-code"}
-
-		updatedModel, cmd := m.handleSetupKeys("x")
-		updated := updatedModel.(Model)
-
-		if !updated.SetupAllowlistPrompt {
-			t.Fatal("unknown key should not change prompt state")
-		}
-		if cmd != nil {
-			t.Fatal("unknown key should not return command")
-		}
-	})
-
-	t.Run("done reset clears allowlist state", func(t *testing.T) {
-		m := New(nil, "")
-		m.Screen = ScreenSetup
-		m.SetupDone = true
-		m.SetupResult = &setup.Result{Agent: "claude-code"}
-		m.SetupAllowlistApplied = true
-		m.SetupAllowlistError = "old error"
-
-		updatedModel, _ := m.handleSetupKeys("enter")
-		updated := updatedModel.(Model)
-
-		if updated.Screen != ScreenDashboard {
-			t.Fatal("enter on done should go to dashboard")
-		}
-		if updated.SetupAllowlistApplied {
-			t.Fatal("should clear SetupAllowlistApplied")
-		}
-		if updated.SetupAllowlistError != "" {
-			t.Fatal("should clear SetupAllowlistError")
-		}
-	})
 }

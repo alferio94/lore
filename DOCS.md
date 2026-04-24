@@ -1,387 +1,46 @@
-# Lore
+# Lore Docs
 
-**Persistent memory for AI coding agents**
+Lore is a single Go binary for shared agent memory, reusable skills, project context, MCP access, and browser-admin workflows.
 
-> *Lore* is the accumulated knowledge and memory of a craft or community.
+The primary product story is **cloud-first runtime surfaces**:
 
-## What is Lore?
+- `lore serve` for HTTP APIs, `/mcp`, and browser-admin access
+- `lore mcp` for stdio MCP
+- PostgreSQL for shared/cloud deployments
 
-An agent-agnostic persistent memory system. A Go binary with SQLite + FTS5 full-text search, exposed via CLI, HTTP API, and MCP server. Thin adapter plugins connect it to specific agents (OpenCode, Claude Code, Cursor, Windsurf, etc.).
+SQLite and `lore tui` remain supported for local development, testing, demos, and compatibility workflows.
 
-**Why Go?** Single binary, cross-platform, no runtime dependencies. Uses `modernc.org/sqlite` (pure Go, no CGO).
+## Docs Index
 
-- **Module**: `github.com/alferio94/lore`
-- **Version**: 0.1.0
+- [Installation](docs/INSTALLATION.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Agent Integration Primitives](docs/AGENT-SETUP.md)
+- [Integration Ownership](docs/PLUGINS.md)
+- [Comparison](docs/COMPARISON.md)
+- [Security](SECURITY.md)
 
----
+## Runtime Surfaces
 
-## Architecture
+### `lore serve`
 
-The Go binary is the brain. Thin adapter plugins per-agent talk to it via HTTP or MCP stdio.
+Starts the shared runtime:
 
-```
-Agent (OpenCode/Claude Code/Cursor/etc.)
-    ↓ (plugin or MCP)
-Lore Go Binary
-    ↓
-SQLite + FTS5 (~/.lore/lore.db)
-```
+- HTTP API
+- `/mcp` endpoint
+- browser-admin surface
 
-Six interfaces:
+Port precedence:
 
-1. **CLI** — Direct terminal usage (`lore search`, `lore save`, etc.)
-2. **HTTP API** — REST API on port 7437 for plugins and integrations
-3. **MCP Server** — stdio transport for any MCP-compatible agent
-4. **TUI** — Interactive terminal UI for browsing memories (`lore tui`)
+1. positional arg
+2. `LORE_PORT`
+3. `PORT`
+4. `7437`
 
----
+### `lore mcp`
 
-## Project Structure
+Starts MCP over stdio for any MCP-compatible agent.
 
-```
-lore/
-├── cmd/lore/main.go              # CLI entrypoint — all commands
-├── internal/
-│   ├── store/store.go              # Core: SQLite + FTS5 + all data operations
-│   ├── server/server.go            # HTTP REST API server (port 7437)
-│   ├── mcp/mcp.go                  # MCP stdio server (15 tools)
-│   ├── project/                     # Project name detection + similarity matching
-│   │   └── project.go              # DetectProject, FindSimilar, Levenshtein
-│   ├── sync/sync.go                # Git sync: manifest + chunks (gzipped JSONL)
-│   └── tui/                        # Bubbletea terminal UI
-│       ├── model.go                # Screen constants, Model struct, Init(), custom messages
-│       ├── styles.go               # Lipgloss styles (Catppuccin Mocha palette)
-│       ├── update.go               # Update(), handleKeyPress(), per-screen handlers
-│       └── view.go                 # View(), per-screen renderers
-├── skills/
-│   └── gentleman-bubbletea/
-│       └── SKILL.md                # Bubbletea TUI patterns reference
-├── DOCS.md
-├── go.mod
-├── go.sum
-└── .gitignore
-```
-
----
-
-## Database Schema
-
-### Tables
-
-- **sessions** — `id` (TEXT PK), `project`, `directory`, `started_at`, `ended_at`, `summary`, `status`
-- **observations** — `id` (INTEGER PK AUTOINCREMENT), `session_id` (FK), `type`, `title`, `content`, `tool_name`, `project`, `scope`, `topic_key`, `normalized_hash`, `revision_count`, `duplicate_count`, `last_seen_at`, `created_at`, `updated_at`, `deleted_at`
-- **observations_fts** — FTS5 virtual table synced via triggers (`title`, `content`, `tool_name`, `type`, `project`)
-- **user_prompts** — `id` (INTEGER PK AUTOINCREMENT), `session_id` (FK), `content`, `project`, `created_at`
-- **prompts_fts** — FTS5 virtual table synced via triggers (`content`, `project`)
-- **sync_chunks** — `chunk_id` (TEXT PK), `imported_at` — tracks which chunks have been imported to prevent duplicates
-
-### SQLite Configuration
-
-- WAL mode for concurrent reads
-- Busy timeout 5000ms
-- Synchronous NORMAL
-- Foreign keys ON
-
----
-
-## CLI Commands
-
-```
-lore serve [port]       Start HTTP API server (port precedence: arg > LORE_PORT > PORT > 7437)
-lore mcp                Start MCP server (stdio transport)
-lore tui                Launch interactive terminal UI
-lore search <query>     Search memories [--type TYPE] [--project PROJECT] [--scope SCOPE] [--limit N]
-lore save <title> <msg> Save a memory [--type TYPE] [--project PROJECT] [--scope SCOPE] [--topic TOPIC_KEY]
-lore timeline <obs_id>  Show chronological context around an observation [--before N] [--after N]
-lore context [project]  Show recent context from previous sessions
-lore stats              Show memory system statistics
-lore export [file]      Export all memories to JSON (default: lore-export.json)
-lore import <file>      Import memories from a JSON export file
-lore sync               Export new memories as chunk [--import] [--status] [--project NAME] [--all]
-lore projects list      Show all projects with obs/session/prompt counts
-lore projects consolidate  Interactive merge of similar project names [--all] [--dry-run]
-lore projects prune     Remove projects with 0 observations [--dry-run]
-lore version            Print version
-lore help               Show help
-```
-
-### Environment Variables
-
-| Variable | Description | Default |
-|---|---|---|
-| `LORE_DATA_DIR` | Override data directory | `~/.lore` |
-| `LORE_PORT` | Preferred HTTP server port for `lore serve` | `7437` |
-| `PORT` | Cloud-host fallback port when `LORE_PORT` is unset | unset |
-| `DATABASE_URL` | `postgres://` / `postgresql://` selects PostgreSQL; other URLs keep SQLite default | unset |
-| `LORE_PROJECT` | Override project name for MCP server | auto-detected via git |
-
-Selection rules:
-
-- unset `DATABASE_URL` → SQLite remains active
-- PostgreSQL URL → PostgreSQL backend bootstrap slice (health, sessions, core observations, sync journal)
-- non-PostgreSQL URL → SQLite remains active
-- malformed URL → startup fails before store initialization
-
-Local PostgreSQL validation uses `docker-compose.postgres.yml` plus `scripts/validate-postgres-local.sh` to run PostgreSQL in Docker while the Go app runs on the host. Search parity, full containerization, and deployment changes remain out of scope.
-
----
-
-## Running as a Service
-
-### Using systemd
-
-First you need add your lore binary to use in a global way. By example: `/usr/bin`, `/usr/local/bin` or `~/.local/bin`.
-In this documentation we will use `~/.local/bin`.
-
-1. First, move binary to `~/.local/bin` (Check if this is in your $PATH variable).
-2. Create a directory for you service with user scope and lore data: `mkdir -p ~/.lore ~/.config/systemd/user`.
-3. Create your service file in the following path: `~/.config/systemd/user/lore.service`.
-4. Reload service list: `systemctl --user daemon-reload`.
-5. Enable your service: `systemctl --user enable lore`.
-6. Then start it: `systemctl --user start lore`.
-7. And finally check the logs: `journalctl --user -u lore -f`.
-
-The following code is an example of the `~/.config/systemd/user/lore.service` file:
-
-```shell
-[Unit]
-Description=Lore Memory Server
-After=network.target
-
-[Service]
-WorkingDirectory=%h
-ExecStart=%h/.local/bin/lore serve
-Restart=always
-RestartSec=3
-Environment=LORE_DATA_DIR=%h/.lore
-
-[Install]
-WantedBy=default.target
-```
-
----
-
-## Terminal UI (TUI)
-
-Interactive Bubbletea-based terminal UI. Launch with `lore tui`.
-
-Built with [Bubbletea](https://github.com/charmbracelet/bubbletea) v1, [Lipgloss](https://github.com/charmbracelet/lipgloss), and [Bubbles](https://github.com/charmbracelet/bubbles) components. Follows the Gentleman Bubbletea skill patterns.
-
-### Screens
-
-| Screen | Description |
-|---|---|
-| **Dashboard** | Stats overview (sessions, observations, prompts, projects) + menu |
-| **Search** | FTS5 text search with text input |
-| **Search Results** | Browsable results list from search |
-| **Recent Observations** | Browse all observations, newest first |
-| **Observation Detail** | Full content of a single observation, scrollable |
-| **Timeline** | Chronological context around an observation (before/after) |
-| **Sessions** | Browse all sessions |
-| **Session Detail** | Observations within a specific session |
-
-### Navigation
-
-- `j/k` or `↑/↓` — Navigate lists
-- `Enter` — Select / drill into detail
-- `t` — View timeline for selected observation
-- `s` or `/` — Quick search from any screen
-- `Esc` or `q` — Go back / quit
-- `Ctrl+C` — Force quit
-
-### Visual Features
-
-- **Catppuccin Mocha** color palette
-- **`(active)` badge** — shown next to sessions and observations from active (non-completed) sessions, sorted to the top of every list
-- **Scroll indicators** — shows position in long lists (e.g. "showing 1-20 of 50")
-- **2-line items** — each observation shows title + content preview
-
-### Architecture (Gentleman Bubbletea patterns)
-
-- `model.go` — Screen constants as `Screen int` iota, single `Model` struct holds ALL state
-- `styles.go` — Lipgloss styles organized by concern (layout, dashboard, list, detail, timeline, search)
-- `update.go` — `Update()` with type switch, `handleKeyPress()` routes to per-screen handlers, each returns `(tea.Model, tea.Cmd)`
-- `view.go` — `View()` routes to per-screen renderers, shared `renderObservationListItem()` for consistent list formatting
-
-### Store Methods (TUI-specific)
-
-The TUI uses dedicated store methods that don't filter by session status (unlike `RecentSessions`/`RecentObservations` which only show completed sessions for MCP context injection):
-
-- `AllSessions()` — All sessions regardless of status, active sorted first
-- `AllObservations()` — All observations regardless of session status, active sorted first
-- `SessionObservations(sessionID)` — All observations for a specific session, chronological order
-
----
-
-## HTTP API Endpoints
-
-All endpoints return JSON. `lore serve` listens using runtime config (`[port]` arg → `LORE_PORT` → `PORT` → `7437`) and host defaults (`127.0.0.1` local, `0.0.0.0` staging).
-
-### Health
-
-- `GET /health` — Returns `{"status": "ok", "service": "lore", "version": "0.1.0"}`
-
-### Sessions
-
-- `POST /sessions` — Create session. Body: `{id, project, directory}`
-- `POST /sessions/{id}/end` — End session. Body: `{summary}`
-- `GET /sessions/recent` — Recent sessions. Query: `?project=X&limit=N`
-
-### Observations
-
-- `POST /observations` — Add observation. Body: `{session_id, type, title, content, tool_name?, project?, scope?, topic_key?}`
-- `GET /observations/recent` — Recent observations. Query: `?project=X&scope=project|personal&limit=N`
-- `GET /observations/{id}` — Get single observation by ID
-- `PATCH /observations/{id}` — Update fields. Body: `{title?, content?, type?, project?, scope?, topic_key?}`
-- `DELETE /observations/{id}` — Delete observation (`?hard=true` for hard delete, soft delete by default)
-
-### Search
-
-- `GET /search` — FTS5 search. Query: `?q=QUERY&type=TYPE&project=PROJECT&scope=SCOPE&limit=N`
-  - Response body remains a JSON array of search results for backward compatibility.
-  - Fallback transparency is exposed via headers:
-    - `X-Lore-Search-Fallback-Used: true|false`
-    - `X-Lore-Search-Fallback-Projects: comma,separated,projects` (empty when not applied)
-
-### Timeline
-
-- `GET /timeline` — Chronological context. Query: `?observation_id=N&before=5&after=5`
-
-### Prompts
-
-- `POST /prompts` — Save user prompt. Body: `{session_id, content, project?}`
-- `GET /prompts/recent` — Recent prompts. Query: `?project=X&limit=N`
-- `GET /prompts/search` — Search prompts. Query: `?q=QUERY&project=X&limit=N`
-
-### Context
-
-- `GET /context` — Formatted context. Query: `?project=X&scope=project|personal`
-
-### Export / Import
-
-- `GET /export` — Export all data as JSON
-- `POST /import` — Import data from JSON. Body: ExportData JSON
-
-### Stats
-
-- `GET /stats` — Memory statistics
-
-### Sync Status
-
-
----
-
-## MCP Tools (15 tools)
-
-### mem_search
-
-Search persistent memory across all sessions. Supports FTS5 full-text search with type/project/scope/limit filters.
-
-### mem_save
-
-Save structured observations. The tool description teaches agents the format:
-
-- **title**: Short, searchable (e.g. "JWT auth middleware")
-- **type**: `decision` | `architecture` | `bugfix` | `pattern` | `config` | `discovery` | `learning`
-- **scope**: `project` (default) | `personal`
-- **topic_key**: optional canonical topic id (e.g. `architecture/auth-model`) used to upsert evolving memories
-- **content**: Structured with `**What**`, `**Why**`, `**Where**`, `**Learned**`
-
-Exact duplicate saves are deduplicated in a rolling time window using a normalized content hash + project + scope + type + title.
-When `topic_key` is provided, `mem_save` upserts the latest observation in the same `project + scope + topic_key`, incrementing `revision_count`.
-
-### mem_update
-
-Update an observation by ID. Supports partial updates for `title`, `content`, `type`, `project`, `scope`, and `topic_key`.
-
-### mem_suggest_topic_key
-
-Suggest a stable `topic_key` from `type + title` (or content fallback). Uses family heuristics like `architecture/*`, `bug/*`, `decision/*`, etc. Use before `mem_save` when you want evolving topics to upsert into a single observation.
-
-### mem_delete
-
-Delete an observation by ID. Uses soft-delete by default (`deleted_at`); optional hard-delete for permanent removal.
-
-### mem_save_prompt
-
-Save user prompts — records what the user asked so future sessions have context about user goals.
-
-### mem_context
-
-Get recent memory context from previous sessions — shows sessions, prompts, and observations, with optional scope filtering for observations.
-
-### mem_stats
-
-Show memory system statistics — sessions, observations, prompts, projects.
-
-### mem_timeline
-
-Progressive disclosure: after searching, drill into chronological context around a specific observation. Shows N observations before and after within the same session.
-
-### mem_get_observation
-
-Get full untruncated content of a specific observation by ID.
-
-### mem_session_summary
-
-Save comprehensive end-of-session summary using OpenCode-style format:
-
-```
-## Goal
-## Instructions
-## Discoveries
-## Accomplished (✅ done, 🔲 pending)
-## Relevant Files
-```
-
-### mem_session_start
-
-Register the start of a new coding session.
-
-### mem_session_end
-
-Mark a session as completed with optional summary.
-
-### mem_capture_passive
-
-Extract structured learnings from text output. Looks for `## Key Learnings:` sections and saves each numbered/bulleted item as a separate observation. Duplicates are automatically skipped.
-
-### mem_merge_projects
-
-**Admin tool.** Merge multiple project name variants into a single canonical name. Accepts an array of source project names and a target canonical name. All observations, sessions, and prompts from the source projects are reassigned to the canonical project.
-
----
-
-## Project Name Normalization
-
-Lore automatically prevents project name drift — the same project saved under different names (`"lore"` vs `"Lore"` vs `"lore-memory"`) by different clients or users.
-
-### Automatic normalization
-
-All project names are normalized on write and read: **lowercase**, **trimmed**, **collapsed hyphens/underscores**. If a name is changed during normalization, a warning is included in the response.
-
-### Auto-detection
-
-The MCP server auto-detects the project name at startup using a priority chain:
-1. `--project` flag
-2. `LORE_PROJECT` environment variable
-3. Git remote origin URL (extracts repo name)
-4. Git repository root directory name
-5. Current working directory basename
-
-### Similar-project warnings
-
-When saving to a project that does not exist yet, Lore checks for similar existing project names (Levenshtein distance, substring, case-insensitive matching) and warns the agent if a likely variant already exists.
-
-### Retroactive cleanup
-
-Use `lore projects consolidate` to interactively merge variant project names, or `mem_merge_projects` for agent-driven consolidation.
-
----
-
-## MCP Configuration
-
-Add to any agent's config:
+Example:
 
 ```json
 {
@@ -389,317 +48,140 @@ Add to any agent's config:
     "lore": {
       "type": "stdio",
       "command": "lore",
-      "args": ["mcp"]
+      "args": ["mcp", "--tools=agent"]
     }
   }
 }
 ```
 
----
+Tool profiles:
 
-## Memory Protocol Full Text
+- `agent`
+- `admin`
+- `all` (default)
 
-The Memory Protocol teaches agents **when** and **how** to use Lore's MCP tools. Without it, the agent has the tools but no behavioral guidance. Add this to your agent's prompt file (see README for per-agent locations).
+### `lore tui`
 
-### WHEN TO SAVE (mandatory — not optional)
+Local terminal UI for browsing memories and sessions.
 
-Call `mem_save` IMMEDIATELY after any of these:
-- Bug fix completed
-- Architecture or design decision made
-- Non-obvious discovery about the codebase
-- Configuration change or environment setup
-- Pattern established (naming, structure, convention)
-- User preference or constraint learned
+Use it when you want a local SQLite/dev interface. Do not treat it as the primary setup or cloud management workflow.
 
-Format for `mem_save`:
-- **title**: Verb + what — short, searchable (e.g. "Fixed N+1 query in UserList", "Chose Zustand over Redux")
-- **type**: `bugfix` | `decision` | `architecture` | `discovery` | `pattern` | `config` | `preference`
-- **scope**: `project` (default) | `personal`
-- **topic_key** (optional, recommended for evolving decisions): stable key like `architecture/auth-model`
-- **content**:
-  ```
-  **What**: One sentence — what was done
-  **Why**: What motivated it (user request, bug, performance, etc.)
-  **Where**: Files or paths affected
-  **Learned**: Gotchas, edge cases, things that surprised you (omit if none)
-  ```
+## Storage Modes
 
-### Topic update rules (mandatory)
+### Shared/cloud runtime
 
-- Different topics must not overwrite each other (e.g. architecture vs bugfix)
-- Reuse the same `topic_key` to update an evolving topic instead of creating new observations
-- If unsure about the key, call `mem_suggest_topic_key` first and then reuse it
-- Use `mem_update` when you have an exact observation ID to correct
+Set `DATABASE_URL` to a PostgreSQL connection string and run `lore serve` in your host environment.
 
-### WHEN TO SEARCH MEMORY
+### Local mode
 
-When the user asks to recall something — any variation of "remember", "recall", "what did we do", "how did we solve", "recordar", "acordate", "qué hicimos", or references to past work:
-1. First call `mem_context` — checks recent session history (fast, cheap)
-2. If not found, call `mem_search` with relevant keywords (FTS5 full-text search)
-3. If you find a match, use `mem_get_observation` for full untruncated content
+Leave `DATABASE_URL` unset and Lore uses SQLite in `~/.lore` (or `LORE_DATA_DIR`).
 
-Also search memory PROACTIVELY when:
-- Starting work on something that might have been done before
-- The user mentions a topic you have no context on — check if past sessions covered it
+## Environment Variables
 
-### SESSION CLOSE PROTOCOL (mandatory)
+### Core runtime
 
-Before ending a session or saying "done" / "listo" / "that's it", you MUST call `mem_session_summary` with this structure:
+| Variable | Description | Default |
+| --- | --- | --- |
+| `LORE_DATA_DIR` | Local SQLite data directory | `~/.lore` |
+| `LORE_PORT` | Preferred port for `lore serve` | `7437` |
+| `PORT` | Cloud-host fallback port | unset |
+| `DATABASE_URL` | PostgreSQL for shared runtime; otherwise SQLite remains active | unset |
+| `LORE_PROJECT` | Override MCP project detection | auto-detected |
 
-```
-## Goal
-[What we were working on this session]
+### Runtime/admin configuration
 
-## Instructions
-[User preferences or constraints discovered — skip if none]
+| Variable | Description |
+| --- | --- |
+| `LORE_ENV` | `local` or `staging` |
+| `LORE_HOST` | Override bind host |
+| `LORE_BASE_URL` | Public base URL for hosted/staging runtime |
+| `LORE_JWT_SECRET` | Required in staging; generated per-process in local mode if unset |
+| `LORE_COOKIE_SECURE` | Override secure-cookie behavior |
+| `LORE_GOOGLE_CLIENT_ID` / `LORE_GOOGLE_CLIENT_SECRET` | Optional Google auth |
+| `LORE_GITHUB_CLIENT_ID` / `LORE_GITHUB_CLIENT_SECRET` | Optional GitHub auth |
 
-## Discoveries
-- [Technical findings, gotchas, non-obvious learnings]
+Staging rules:
 
-## Accomplished
-- [Completed items with key details]
+- `LORE_ENV=staging` requires `LORE_BASE_URL`
+- `LORE_ENV=staging` requires `LORE_JWT_SECRET`
+- default host becomes `0.0.0.0`
 
-## Next Steps
-- [What remains to be done — for the next session]
+## CLI Reference
 
-## Relevant Files
-- path/to/file — [what it does or what changed]
-```
-
-This is NOT optional. If you skip this, the next session starts blind.
-
-### PASSIVE CAPTURE — automatic learning extraction
-
-When completing a task or subtask, include a `## Key Learnings:` section at the end of your response with numbered items. Lore will automatically extract and save these as observations.
-
-Example:
-```
-## Key Learnings:
-
-1. bcrypt cost=12 is the right balance for our server performance
-2. JWT refresh tokens need atomic rotation to prevent race conditions
+```text
+lore serve [port]                       Start HTTP API server
+lore mcp [--tools=PROFILE] [--project] Start MCP server (stdio)
+lore tui                                Launch local terminal UI
+lore search <query>                     Search memories
+lore save <title> <msg>                 Save a memory
+lore timeline <obs_id>                  Show chronological context
+lore context [project]                  Show recent context
+lore stats                              Show memory system statistics
+lore export [file]                      Export memories to JSON
+lore import <file>                      Import memories from JSON
+lore sync                               Export/import chunked sync data
+lore projects list                      List project counts
+lore projects consolidate               Merge similar project names
+lore projects prune                     Remove empty projects
+lore setup [agent]                      Deprecated compatibility stub only
+lore obsidian-export                    Export to an Obsidian-compatible vault
+lore version                            Print version
+lore help                               Show help
 ```
 
-You can also call `mem_capture_passive(content)` directly with any text that contains a learning section. This is a safety net — it captures knowledge even if you forget to call `mem_save` explicitly.
+## HTTP and MCP Contracts
 
-### AFTER COMPACTION
+### HTTP API
 
-If you see a message about compaction or context reset, or if you see "FIRST ACTION REQUIRED" in your context:
-1. IMMEDIATELY call `mem_session_summary` with the compacted summary content — this persists what was done before compaction
-2. Then call `mem_context` to recover any additional context from previous sessions
-3. Only THEN continue working
+`lore serve` exposes JSON APIs for sessions, observations, prompts, search, timeline, context, import/export, and project management.
 
-Do not skip step 1. Without it, everything done before compaction is lost from memory.
+### MCP
 
----
+Lore supports:
 
-## Features
+- stdio MCP via `lore mcp`
+- HTTP MCP via `/mcp` when `lore serve` is running
 
-### 1. Full-Text Search (FTS5)
+These are the stable Lore-owned primitives that external configurators should target.
 
-- Searches across title, content, tool_name, type, and project
-- Query sanitization: wraps each word in quotes to avoid FTS5 syntax errors
-- Supports type and project filters
+## Local Compatibility Surfaces
 
-### 2. Timeline (Progressive Disclosure)
+These remain supported, but secondary:
 
-Three-layer pattern for token-efficient memory retrieval:
+- SQLite default storage for local installs
+- `lore tui` for local browsing
+- `obsidian-export` and the standalone Obsidian client package
 
-1. `mem_search` — Find relevant observations
-2. `mem_timeline` — Drill into chronological neighborhood of a result
-3. `mem_get_observation` — Get full untruncated content
+## Deprecated Vendor Setup
 
-### 3. Privacy Tags
+`lore setup [agent]` now exists only to avoid abrupt breakage for older workflows. It prints a deprecation handoff and performs no vendor installation, plugin copying, or agent-specific file writes.
 
-`<private>...</private>` content is stripped at TWO levels:
+Lore does **not** own:
 
-1. **Plugin layer** (TypeScript) — Strips before data leaves the process
-2. **Store layer** (Go) — `stripPrivateTags()` runs inside `AddObservation()` and `AddPrompt()`
+- vendor plugin packaging
+- Claude/OpenCode/Gemini/Codex installer flows
+- prompt injection or hook wiring for third-party clients
 
-Example: `Set up API with <private>sk-abc123</private>` becomes `Set up API with [REDACTED]`
+Those concerns belong to external configurators or the agent client itself.
 
-### 4. User Prompt Storage
+## Suggested Onboarding Paths
 
-Separate table captures what the USER asked (not just tool calls). Gives future sessions the "why" behind the "what". Full FTS5 search support.
+### Shared runtime / team deployment
 
-### 5. Export / Import
+1. Install Lore
+2. Set `DATABASE_URL`, `LORE_BASE_URL`, and `LORE_JWT_SECRET`
+3. Run `lore serve`
+4. Connect agents through `/mcp` or `lore mcp`
 
-Share memories across machines, backup, or migrate:
+### Local development / evaluation
 
-- `lore export` — JSON dump of all sessions, observations, prompts
-- `lore import <file>` — Load from JSON, sessions use INSERT OR IGNORE (skip duplicates), atomic transaction
+1. Install Lore
+2. Run `lore serve` or `lore mcp`
+3. Optionally use `lore tui`
+4. Keep SQLite as the local backend unless you need PostgreSQL validation
 
-### 6. Git Sync (Chunked)
+## Notes for Contributors
 
-Share memories through git repositories using compressed chunks with a manifest index.
-
-- `lore sync` — Exports new memories as a gzipped JSONL chunk to `.lore/chunks/`
-- `lore sync --all` — Exports ALL memories from every project (ignores directory-based filter)
-- `lore sync --import` — Imports chunks listed in the manifest that haven't been imported yet
-- `lore sync --status` — Shows how many chunks exist locally vs remotely, and how many are pending import
-- `lore sync --project NAME` — Filters export to a specific project
-
-**Architecture**:
-```
-.lore/
-├── manifest.json          ← index of all chunks (small, git-mergeable)
-├── chunks/
-│   ├── a3f8c1d2.jsonl.gz ← chunk 1 (gzipped JSONL)
-│   ├── b7d2e4f1.jsonl.gz ← chunk 2
-│   └── ...
-└── lore.db              ← local working DB (gitignored)
-```
-
-**Why chunks?**
-- Each `lore sync` creates a NEW chunk — old chunks are never modified
-- No merge conflicts: each dev creates independent chunks, git just adds files
-- Chunks are content-hashed (SHA-256 prefix) — each chunk is imported only once
-- The manifest is the only file git diffs — it's small and append-only
-- Compressed: a chunk with 8 sessions + 10 observations = ~2KB
-
-**Auto-import**: The OpenCode plugin detects `.lore/manifest.json` at startup and runs `lore sync --import` to load any new chunks. Clone a repo → open OpenCode → team memories are loaded.
-
-**Tracking**: The local DB stores a `sync_chunks` table with chunk IDs that have been imported. This prevents re-importing the same data if `sync --import` runs multiple times.
-
-### 7. AI Compression (Agent-Driven)
-
-Instead of a separate LLM service, the agent itself compresses observations. The agent already has the model, context, and API key.
-
-**Two levels:**
-
-- **Per-action** (`mem_save`): Structured summaries after each significant action
-
-  ```
-  **What**: [what was done]
-  **Why**: [reasoning]
-  **Where**: [files affected]
-  **Learned**: [gotchas, decisions]
-  ```
-
-- **Session summary** (`mem_session_summary`): OpenCode-style comprehensive summary
-
-  ```
-  ## Goal
-  ## Instructions
-  ## Discoveries
-  ## Accomplished
-  ## Relevant Files
-  ```
-
-The OpenCode plugin injects the **Memory Protocol** via system prompt to teach agents both formats, plus strict rules about when to save and a mandatory session close protocol.
-
-### 8. No Raw Auto-Capture (Agent-Only Memory)
-
-The OpenCode plugin does NOT auto-capture raw tool calls. All memory comes from the agent itself:
-
-- **`mem_save`** — Agent saves structured observations after significant work (decisions, bugfixes, patterns)
-- **`mem_session_summary`** — Agent saves comprehensive end-of-session summaries
-
-**Why?** Raw tool calls (`edit: {file: "foo.go"}`, `bash: {command: "go build"}`) are noisy and pollute FTS5 search results. The agent's curated summaries are higher signal, more searchable, and don't bloat the database. Shell history and git provide the raw audit trail.
-
-The plugin still counts tool calls per session (for session end summary stats) but doesn't persist them as observations.
-
----
-
-## OpenCode Plugin
-
-Install with `lore setup opencode` — this copies the plugin to `~/.config/opencode/plugins/lore.ts` AND auto-registers the MCP server in `opencode.json`.
-
-A thin TypeScript adapter that:
-
-1. **Auto-starts** the lore binary if not running
-2. **Auto-imports** git-synced memories from `.lore/memories.json` if present in the project
-3. **Captures events**: `session.created`, `session.idle`, `session.deleted`, `message.updated`
-4. **Tracks tool count**: Counts tool calls per session (for session end stats), but does NOT persist raw tool observations
-5. **Captures user prompts**: From `message.updated` events (>10 chars)
-6. **Injects Memory Protocol**: Strict rules for when to save, when to search, and mandatory session close protocol — via `chat.system.transform`
-7. **Injects context on compaction**: Auto-saves checkpoint + injects previous session context + reminds compressor
-8. **Privacy**: Strips `<private>` tags before sending to HTTP API
-
-### Session Resilience
-
-The plugin uses `ensureSession()` — an idempotent function that creates the session in lore if it doesn't exist yet. This is called from every hook that receives a `sessionID`, not just `session.created`. This means:
-
-- **Plugin reload**: If OpenCode restarts or the plugin is reloaded mid-session, the session is re-created on the next tool call or compaction event
-- **Reconnect**: If you reconnect to an existing session, the session is created on-demand
-- **No lost data**: Prompts, tool counts, and compaction context all work even if `session.created` was missed
-
-Session IDs come from OpenCode's hook inputs (`input.sessionID` in `tool.execute.after`, `input.sessionID` in `experimental.session.compacting`) rather than from a fragile in-memory Map populated by events.
-
-### Plugin API Types (OpenCode `@opencode-ai/plugin`)
-
-The `tool.execute.after` hook receives:
-- **`input`**: `{ tool, sessionID, callID, args }` — `input.sessionID` identifies the OpenCode session
-- **`output`**: `{ title, output, metadata }` — `output.output` has the result string
-
-### LORE_TOOLS (excluded from tool count)
-
-`mem_search`, `mem_save`, `mem_update`, `mem_delete`, `mem_suggest_topic_key`, `mem_save_prompt`, `mem_session_summary`, `mem_context`, `mem_stats`, `mem_timeline`, `mem_get_observation`, `mem_session_start`, `mem_session_end`, `mem_capture_passive`, `mem_merge_projects`
-
----
-
-## Dependencies
-
-### Go
-
-- `github.com/mark3labs/mcp-go v0.44.0` — MCP protocol implementation
-- `modernc.org/sqlite v1.45.0` — Pure Go SQLite driver (no CGO)
-- `github.com/charmbracelet/bubbletea v1.3.10` — Terminal UI framework
-- `github.com/charmbracelet/lipgloss v1.1.0` — Terminal styling
-- `github.com/charmbracelet/bubbles v1.0.0` — TUI components (textinput, etc.)
-- `github.com/lib/pq` — Postgres driver (for cloud server)
-- `github.com/golang-jwt/jwt/v5` — JWT token generation and validation (for cloud auth)
-- `golang.org/x/crypto` — bcrypt password hashing (for cloud auth)
-
-### OpenCode Plugin
-
-- `@opencode-ai/plugin` — OpenCode plugin types and helpers
-- Runtime: Bun (built into OpenCode)
-
----
-
-## Installation
-
-### From source
-
-```bash
-git clone https://github.com/alferio94/lore.git
-cd lore
-go build -o lore ./cmd/lore
-go install ./cmd/lore
-```
-
-### Binary location
-
-After `go install`: `$GOPATH/bin/lore` (typically `~/go/bin/lore`)
-
-### Data location
-
-`~/.lore/lore.db` (SQLite database, created on first run)
-
----
-
-## Design Decisions
-
-1. **Go over TypeScript** — Single binary, cross-platform, no runtime. The initial prototype was TS but was rewritten.
-2. **SQLite + FTS5 over vector DB** — FTS5 covers 95% of use cases. No ChromaDB/Pinecone complexity.
-3. **Agent-agnostic core** — Go binary is the brain, thin plugins per-agent. Not locked to any agent.
-4. **Agent-driven compression** — The agent already has an LLM. No separate compression service.
-5. **Privacy at two layers** — Strip in plugin AND store. Defense in depth.
-6. **Pure Go SQLite (modernc.org/sqlite)** — No CGO means true cross-platform binary distribution.
-7. **No raw auto-capture** — Raw tool calls (edit, bash, etc.) are noisy, pollute search results, and bloat the database. The agent saves curated summaries via `mem_save` and `mem_session_summary` instead. Shell history and git provide the raw audit trail.
-8. **TUI with Bubbletea** — Interactive terminal UI for browsing memories without leaving the terminal. Follows Gentleman Bubbletea patterns (screen constants, single Model struct, vim keys).
-
----
-
-## Inspired By
-
-[claude-mem](https://github.com/thedotmack/claude-mem) — But agent-agnostic and with a Go core instead of TypeScript.
-
-Key differences from claude-mem:
-
-- Agent-agnostic (not locked to Claude Code)
-- Go binary (not Node.js/TypeScript)
-- FTS5 instead of ChromaDB
-- Agent-driven compression instead of separate LLM calls
-- Simpler architecture (single binary, embedded web dashboard)
+- Product docs must describe cloud/runtime surfaces first.
+- Local SQLite/TUI guidance should stay available but explicitly secondary.
+- Do not add new Lore-owned vendor setup flows or packaged agent assets.

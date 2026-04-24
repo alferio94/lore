@@ -650,119 +650,24 @@ func TestPrintUsage(t *testing.T) {
 	if !strings.Contains(stdout, "search <query>") || !strings.Contains(stdout, "setup [agent]") {
 		t.Fatalf("usage missing expected commands: %q", stdout)
 	}
-}
-
-func TestPrintPostInstall(t *testing.T) {
-	tests := []struct {
-		agent   string
-		expects []string
-	}{
-		{agent: "opencode", expects: []string{"Restart OpenCode", "lore serve &"}},
-		{agent: "gemini-cli", expects: []string{"Restart Gemini CLI", "~/.gemini/settings.json"}},
-		{agent: "codex", expects: []string{"Restart Codex", "~/.codex/config.toml"}},
-		{agent: "unknown", expects: nil},
+	if !strings.Contains(stdout, "Launch local SQLite/dev browser UI") {
+		t.Fatalf("usage should frame tui as a local-only browser surface: %q", stdout)
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.agent, func(t *testing.T) {
-			stdout, stderr := captureOutput(t, func() { printPostInstall(tc.agent) })
-			if stderr != "" {
-				t.Fatalf("expected no stderr, got: %q", stderr)
-			}
-			for _, expected := range tc.expects {
-				if !strings.Contains(stdout, expected) {
-					t.Fatalf("output missing %q: %q", expected, stdout)
-				}
-			}
-			if len(tc.expects) == 0 && stdout != "" {
-				t.Fatalf("expected empty output for unknown agent, got: %q", stdout)
-			}
-		})
+	if strings.Contains(stdout, "Install/setup agent integration") {
+		t.Fatalf("usage should not advertise setup ownership: %q", stdout)
 	}
 }
 
-func TestPrintPostInstallClaudeCodeAllowlist(t *testing.T) {
-	t.Run("user accepts allowlist", func(t *testing.T) {
-		oldScan := scanInputLine
-		oldAllowlist := setupAddClaudeCodeAllowlist
-		t.Cleanup(func() {
-			scanInputLine = oldScan
-			setupAddClaudeCodeAllowlist = oldAllowlist
-		})
-
-		scanInputLine = func(a ...any) (int, error) {
-			ptr := a[0].(*string)
-			*ptr = "y"
-			return 1, nil
+func TestPrintSetupDeprecation(t *testing.T) {
+	stdout, stderr := captureOutput(t, func() { printSetupDeprecation("codex") })
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got: %q", stderr)
+	}
+	for _, expected := range []string{"deprecated", "codex", "external configurator", "lore mcp", "lore serve", "no file writes"} {
+		if !strings.Contains(strings.ToLower(stdout), strings.ToLower(expected)) {
+			t.Fatalf("output missing %q: %q", expected, stdout)
 		}
-		allowlistCalled := false
-		setupAddClaudeCodeAllowlist = func() error {
-			allowlistCalled = true
-			return nil
-		}
-
-		stdout, _ := captureOutput(t, func() { printPostInstall("claude-code") })
-		if !allowlistCalled {
-			t.Fatalf("expected AddClaudeCodeAllowlist to be called")
-		}
-		if !strings.Contains(stdout, "tools added to allowlist") {
-			t.Fatalf("expected success message, got: %q", stdout)
-		}
-		if !strings.Contains(stdout, "Restart Claude Code") {
-			t.Fatalf("expected next steps, got: %q", stdout)
-		}
-	})
-
-	t.Run("user declines allowlist", func(t *testing.T) {
-		oldScan := scanInputLine
-		oldAllowlist := setupAddClaudeCodeAllowlist
-		t.Cleanup(func() {
-			scanInputLine = oldScan
-			setupAddClaudeCodeAllowlist = oldAllowlist
-		})
-
-		scanInputLine = func(a ...any) (int, error) {
-			ptr := a[0].(*string)
-			*ptr = "n"
-			return 1, nil
-		}
-		allowlistCalled := false
-		setupAddClaudeCodeAllowlist = func() error {
-			allowlistCalled = true
-			return nil
-		}
-
-		stdout, _ := captureOutput(t, func() { printPostInstall("claude-code") })
-		if allowlistCalled {
-			t.Fatalf("expected AddClaudeCodeAllowlist NOT to be called")
-		}
-		if !strings.Contains(stdout, "Skipped") {
-			t.Fatalf("expected skip message, got: %q", stdout)
-		}
-	})
-
-	t.Run("allowlist error shows warning", func(t *testing.T) {
-		oldScan := scanInputLine
-		oldAllowlist := setupAddClaudeCodeAllowlist
-		t.Cleanup(func() {
-			scanInputLine = oldScan
-			setupAddClaudeCodeAllowlist = oldAllowlist
-		})
-
-		scanInputLine = func(a ...any) (int, error) {
-			ptr := a[0].(*string)
-			*ptr = "y"
-			return 1, nil
-		}
-		setupAddClaudeCodeAllowlist = func() error {
-			return os.ErrPermission
-		}
-
-		_, stderr := captureOutput(t, func() { printPostInstall("claude-code") })
-		if !strings.Contains(stderr, "warning") {
-			t.Fatalf("expected warning in stderr, got: %q", stderr)
-		}
-	})
+	}
 }
 
 func TestCmdSaveAndSearch(t *testing.T) {

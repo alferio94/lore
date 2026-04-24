@@ -34,7 +34,6 @@ import (
 	"github.com/alferio94/lore/internal/obsidian"
 	"github.com/alferio94/lore/internal/project"
 	"github.com/alferio94/lore/internal/server"
-	"github.com/alferio94/lore/internal/setup"
 	"github.com/alferio94/lore/internal/store"
 	engramsync "github.com/alferio94/lore/internal/sync"
 	"github.com/alferio94/lore/internal/tui"
@@ -82,10 +81,7 @@ var (
 
 	checkForUpdates = versioncheck.CheckLatest
 
-	setupSupportedAgents        = setup.SupportedAgents
-	setupInstallAgent           = setup.Install
-	setupAddClaudeCodeAllowlist = setup.AddClaudeCodeAllowlist
-	scanInputLine               = fmt.Scanln
+	scanInputLine = fmt.Scanln
 
 	storeSearch = func(s store.Contract, query string, opts store.SearchOptions) ([]store.SearchResult, error) {
 		return s.Search(query, opts)
@@ -1504,95 +1500,23 @@ func cmdProjectsPrune(cfg store.Config) {
 }
 
 func cmdSetup() {
-	agents := setupSupportedAgents()
-
-	// If agent name given directly: lore setup opencode
+	agent := ""
 	if len(os.Args) > 2 && !strings.HasPrefix(os.Args[2], "-") {
-		result, err := setupInstallAgent(os.Args[2])
-		if err != nil {
-			fatal(err)
-		}
-		fmt.Printf("✓ Installed %s plugin (%d files)\n", result.Agent, result.Files)
-		fmt.Printf("  → %s\n", result.Destination)
-		printPostInstall(result.Agent)
-		return
+		agent = os.Args[2]
 	}
-
-	// Interactive selection
-	fmt.Println("lore setup — Install agent plugin")
-	fmt.Println()
-	fmt.Println("Which agent do you want to set up?")
-	fmt.Println()
-
-	for i, a := range agents {
-		fmt.Printf("  [%d] %s\n", i+1, a.Description)
-		fmt.Printf("      Install to: %s\n\n", a.InstallDir)
-	}
-
-	fmt.Print("Enter choice (1-", len(agents), "): ")
-	var input string
-	scanInputLine(&input)
-
-	choice, err := strconv.Atoi(strings.TrimSpace(input))
-	if err != nil || choice < 1 || choice > len(agents) {
-		fmt.Fprintln(os.Stderr, "Invalid choice.")
-		exitFunc(1)
-	}
-
-	selected := agents[choice-1]
-	fmt.Printf("\nInstalling %s plugin...\n", selected.Name)
-
-	result, err := setupInstallAgent(selected.Name)
-	if err != nil {
-		fatal(err)
-	}
-
-	fmt.Printf("✓ Installed %s plugin (%d files)\n", result.Agent, result.Files)
-	fmt.Printf("  → %s\n", result.Destination)
-	printPostInstall(result.Agent)
+	printSetupDeprecation(agent)
 }
 
-func printPostInstall(agent string) {
-	switch agent {
-	case "opencode":
-		fmt.Println("\nNext steps:")
-		fmt.Println("  1. Restart OpenCode — plugin + MCP server are ready")
-		fmt.Println("  2. Run 'lore serve &' for session tracking (HTTP API)")
-	case "claude-code":
-		// Offer to add lore tools to the permissions allowlist
-		fmt.Print("\nAdd lore tools to ~/.claude/settings.json allowlist?\n")
-		fmt.Print("This prevents Claude Code from asking permission on every tool call.\n")
-		fmt.Print("Add to allowlist? (y/N): ")
-		var answer string
-		scanInputLine(&answer)
-		answer = strings.TrimSpace(strings.ToLower(answer))
-		if answer == "y" || answer == "yes" {
-			if err := setupAddClaudeCodeAllowlist(); err != nil {
-				fmt.Fprintf(os.Stderr, "  warning: could not update allowlist: %v\n", err)
-				fmt.Fprintln(os.Stderr, "  You can add them manually to permissions.allow in ~/.claude/settings.json")
-			} else {
-				fmt.Println("  ✓ Lore tools added to allowlist")
-			}
-		} else {
-			fmt.Println("  Skipped. You can add them later to permissions.allow in ~/.claude/settings.json")
-		}
-
-		fmt.Println("\nNext steps:")
-		fmt.Println("  1. Restart Claude Code — the plugin is active immediately")
-		fmt.Println("  2. Verify with: claude plugin list")
-		fmt.Println("  3. MCP config written to ~/.claude/mcp/lore.json using absolute binary path")
-		fmt.Println("     (survives plugin auto-updates; re-run 'lore setup claude-code' if you move the binary)")
-	case "gemini-cli":
-		fmt.Println("\nNext steps:")
-		fmt.Println("  1. Restart Gemini CLI so MCP config is reloaded")
-		fmt.Println("  2. Verify ~/.gemini/settings.json includes mcpServers.lore")
-		fmt.Println("  3. Verify ~/.gemini/system.md + ~/.gemini/.env exist for compaction recovery")
-	case "codex":
-		fmt.Println("\nNext steps:")
-		fmt.Println("  1. Restart Codex so MCP config is reloaded")
-		fmt.Println("  2. Verify ~/.codex/config.toml has [mcp_servers.lore]")
-		fmt.Println("  3. Verify model_instructions_file + experimental_compact_prompt_file are set")
+func printSetupDeprecation(agent string) {
+	if agent == "" {
+		fmt.Println("lore setup is deprecated.")
+	} else {
+		fmt.Printf("lore setup %s is deprecated.\n", agent)
 	}
+	fmt.Println("Lore no longer installs or writes agent-specific configuration from core; this compatibility stub performs no file writes.")
+	fmt.Println("Use the external configurator for vendor setup, then connect through Lore runtime primitives:")
+	fmt.Println("  - lore mcp --tools=agent")
+	fmt.Println("  - lore serve")
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -1611,7 +1535,7 @@ Commands:
                        Combine: --tools=agent,admin or pick individual tools
                        --project  Override detected project name (default: git remote → cwd)
                        Example: lore mcp --tools=agent
-  tui                Launch interactive terminal UI
+	  tui                Launch local SQLite/dev browser UI
   search <query>     Search memories [--type TYPE] [--project PROJECT] [--scope SCOPE] [--limit N]
   save <title> <msg> Save a memory  [--type TYPE] [--project PROJECT] [--scope SCOPE]
   timeline <obs_id>  Show chronological context around an observation [--before N] [--after N]
@@ -1624,7 +1548,7 @@ Commands:
                      Merge similar project names into one canonical name
                        --all      Scan ALL projects for similar name groups
                        --dry-run  Preview what would be merged (no changes)
-  setup [agent]      Install/setup agent integration (opencode, claude-code, gemini-cli, codex)
+	  setup [agent]      Deprecated compatibility stub; use the external configurator
   sync               Export new memories as compressed chunk to .lore/
                        --import   Import new chunks from .lore/ into local DB
                        --status   Show sync status (local vs remote chunks)
