@@ -3,11 +3,15 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alferio94/lore/internal/store"
 	mcppkg "github.com/mark3labs/mcp-go/mcp"
+	"github.com/ory/dockertest/v3"
+	"github.com/ory/dockertest/v3/docker"
 )
 
 func newMCPTestStore(t *testing.T) *store.Store {
@@ -26,6 +30,58 @@ func newMCPTestStore(t *testing.T) *store.Store {
 		_ = s.Close()
 	})
 	return s
+}
+
+func newPostgresMCPTestStore(t *testing.T) *store.PostgresStore {
+	t.Helper()
+
+	pool, err := dockertest.NewPool("")
+	if err != nil {
+		t.Skipf("docker unavailable: %v", err)
+	}
+
+	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
+		Repository: "postgres",
+		Tag:        "16-alpine",
+		Env: []string{
+			"POSTGRES_USER=lore",
+			"POSTGRES_PASSWORD=lore",
+			"POSTGRES_DB=lore",
+		},
+	}, func(config *docker.HostConfig) {
+		config.AutoRemove = true
+		config.RestartPolicy = docker.RestartPolicy{Name: "no"}
+	})
+	if err != nil {
+		t.Skipf("postgres container unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = pool.Purge(resource) })
+
+	databaseURL := fmt.Sprintf("postgres://lore:lore@127.0.0.1:%s/lore?sslmode=disable", resource.GetPort("5432/tcp"))
+
+	var opened store.Contract
+	err = pool.Retry(func() error {
+		opened, err = store.Open(store.Config{
+			Backend:              store.BackendPostgreSQL,
+			DatabaseURL:          databaseURL,
+			MaxObservationLength: 50000,
+			MaxContextResults:    20,
+			MaxSearchResults:     20,
+			DedupeWindow:         15 * time.Minute,
+		})
+		return err
+	})
+	if err != nil {
+		t.Skipf("postgres did not become ready: %v", err)
+	}
+
+	pg, ok := opened.(*store.PostgresStore)
+	if !ok {
+		_ = opened.Close()
+		t.Fatalf("Open() returned %T, want *store.PostgresStore", opened)
+	}
+	t.Cleanup(func() { _ = pg.Close() })
+	return pg
 }
 
 func callResultText(t *testing.T, res *mcppkg.CallToolResult) string {
@@ -595,6 +651,81 @@ func TestHandleSearchIncludesFallbackMetadataWhenUsed(t *testing.T) {
 	}
 	if !strings.Contains(text, "fallback_projects=[lore-core]") {
 		t.Fatalf("expected fallback_projects in output, got: %s", text)
+	}
+}
+
+func TestHandleSearchPostgresIncludesFallbackMetadataAndDefaultProject(t *testing.T) {
+	s := newPostgresMCPTestStore(t)
+	if err := s.CreateSession("pg-mcp-default", "Lore", "/tmp/lore"); err != nil {
+		t.Fatalf("create lore session: %v", err)
+	}
+	if err := s.CreateSession("pg-mcp-fallback", "Lore-Core", "/tmp/lore-core"); err != nil {
+		t.Fatalf("create lore core session: %v", err)
+	}
+
+	if _, err := s.AddObservation(store.AddObservationParams{
+		SessionID: "pg-mcp-default",
+		Type:      "decision",
+		Title:     "Default project hit",
+		Content:   "default project metadata keyword",
+		Project:   "Lore",
+		Scope:     "project",
+	}); err != nil {
+		t.Fatalf("seed default project observation: %v", err)
+	}
+	if _, err := s.AddObservation(store.AddObservationParams{
+		SessionID: "pg-mcp-fallback",
+		Type:      "decision",
+		Title:     "Fallback project hit",
+		Content:   "fallback metadata keyword",
+		Project:   "Lore-Core",
+		Scope:     "project",
+	}); err != nil {
+		t.Fatalf("seed fallback observation: %v", err)
+	}
+
+	h := handleSearch(s, MCPConfig{DefaultProject: "Lore"})
+
+	defaultReq := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"query":   "default",
+		"project": "",
+		"scope":   "project",
+		"limit":   5.0,
+	}}}
+	defaultRes, err := h(context.Background(), defaultReq)
+	if err != nil {
+		t.Fatalf("default project search handler error: %v", err)
+	}
+	if defaultRes.IsError {
+		t.Fatalf("unexpected default project search error: %s", callResultText(t, defaultRes))
+	}
+	defaultText := callResultText(t, defaultRes)
+	if !strings.Contains(defaultText, "Found 1 memories") {
+		t.Fatalf("expected default project result, got: %s", defaultText)
+	}
+	if !strings.Contains(defaultText, "fallback_used=false") {
+		t.Fatalf("expected fallback_used=false for default-project exact hit, got: %s", defaultText)
+	}
+
+	fallbackReq := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"query":   "metadata",
+		"project": "lore-c0re",
+		"scope":   "project",
+		"limit":   5.0,
+	}}}
+	fallbackRes, err := h(context.Background(), fallbackReq)
+	if err != nil {
+		t.Fatalf("fallback search handler error: %v", err)
+	}
+	if fallbackRes.IsError {
+		t.Fatalf("unexpected fallback search error: %s", callResultText(t, fallbackRes))
+	}
+	fallbackText := callResultText(t, fallbackRes)
+	if !strings.Contains(fallbackText, "fallback_used=true") {
+		t.Fatalf("expected fallback_used=true in postgres MCP output, got: %s", fallbackText)
+	}
+	if !strings.Contains(fallbackText, "fallback_projects=[lore-core]") {
+		t.Fatalf("expected fallback_projects=[lore-core] in postgres MCP output, got: %s", fallbackText)
 	}
 }
 

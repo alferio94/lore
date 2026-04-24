@@ -79,6 +79,18 @@ func TestOpenDatabaseBootstrapsIdempotently(t *testing.T) {
 	if execs := stubExecCount(name); execs == 0 {
 		t.Fatalf("expected bootstrap statements to execute")
 	}
+
+	statements := strings.Join(stubExecutedStatements(name), "\n")
+	for _, needle := range []string{
+		"idx_pg_obs_search_vector",
+		"to_tsvector('simple'",
+		"setweight(",
+		"USING GIN",
+	} {
+		if !strings.Contains(statements, needle) {
+			t.Fatalf("expected bootstrap statements to include %q, got %s", needle, statements)
+		}
+	}
 }
 
 func TestOpenDatabaseReturnsPingFailure(t *testing.T) {
@@ -98,9 +110,10 @@ func TestOpenDatabaseReturnsPingFailure(t *testing.T) {
 }
 
 var (
-	stubMu       sync.Mutex
-	stubCounters = map[string]int{}
-	registerSeq  int
+	stubMu         sync.Mutex
+	stubCounters   = map[string]int{}
+	stubStatements = map[string][]string{}
+	registerSeq    int
 )
 
 func registerStubDriver(t *testing.T) string {
@@ -110,6 +123,7 @@ func registerStubDriver(t *testing.T) string {
 	registerSeq++
 	name := fmt.Sprintf("stub-postgres-%d", registerSeq)
 	stubCounters[name] = 0
+	stubStatements[name] = nil
 	sql.Register(name, stubDriver{name: name})
 	return name
 }
@@ -118,6 +132,12 @@ func stubExecCount(name string) int {
 	stubMu.Lock()
 	defer stubMu.Unlock()
 	return stubCounters[name]
+}
+
+func stubExecutedStatements(name string) []string {
+	stubMu.Lock()
+	defer stubMu.Unlock()
+	return append([]string(nil), stubStatements[name]...)
 }
 
 type stubDriver struct{ name string }
@@ -130,9 +150,10 @@ func (c *stubConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New
 func (c *stubConn) Close() error                        { return nil }
 func (c *stubConn) Begin() (driver.Tx, error)           { return stubTx{}, nil }
 
-func (c *stubConn) ExecContext(_ context.Context, _ string, _ []driver.NamedValue) (driver.Result, error) {
+func (c *stubConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
 	stubMu.Lock()
 	stubCounters[c.name]++
+	stubStatements[c.name] = append(stubStatements[c.name], query)
 	stubMu.Unlock()
 	return driver.RowsAffected(1), nil
 }

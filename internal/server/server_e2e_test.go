@@ -410,13 +410,43 @@ func TestPostgresApprovedSliceE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search request: %v", err)
 	}
-	if searchResp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("expected 500 search unsupported, got %d", searchResp.StatusCode)
+	if searchResp.StatusCode != http.StatusOK {
+		searchBody, _ := io.ReadAll(searchResp.Body)
+		_ = searchResp.Body.Close()
+		t.Fatalf("expected 200 postgres search, got %d body=%q", searchResp.StatusCode, string(searchBody))
 	}
-	searchBody, _ := io.ReadAll(searchResp.Body)
-	_ = searchResp.Body.Close()
-	if !strings.Contains(string(searchBody), "does not support search") {
-		t.Fatalf("expected explicit unsupported search error, got %q", string(searchBody))
+	if got := searchResp.Header.Get("X-Lore-Search-Fallback-Used"); got != "false" {
+		t.Fatalf("expected fallback_used=false for exact postgres search, got %q", got)
+	}
+	if got := searchResp.Header.Get("X-Lore-Search-Fallback-Projects"); got != "" {
+		t.Fatalf("expected empty fallback projects header, got %q", got)
+	}
+	searchResults := decodeJSON[[]map[string]any](t, searchResp)
+	if len(searchResults) != 1 {
+		t.Fatalf("expected one postgres search result, got %d", len(searchResults))
+	}
+	if !strings.Contains(searchResults[0]["content"].(string), "sync scoped") {
+		t.Fatalf("expected postgres search result to reflect updated content, got %+v", searchResults[0])
+	}
+
+	fallbackResp, err := client.Get(ts.URL + "/search?q=postgres&project=l0re&scope=project&limit=10")
+	if err != nil {
+		t.Fatalf("fallback search request: %v", err)
+	}
+	if fallbackResp.StatusCode != http.StatusOK {
+		fallbackBody, _ := io.ReadAll(fallbackResp.Body)
+		_ = fallbackResp.Body.Close()
+		t.Fatalf("expected 200 postgres fallback search, got %d body=%q", fallbackResp.StatusCode, string(fallbackBody))
+	}
+	if got := fallbackResp.Header.Get("X-Lore-Search-Fallback-Used"); got != "true" {
+		t.Fatalf("expected fallback_used=true for postgres fallback search, got %q", got)
+	}
+	if got := fallbackResp.Header.Get("X-Lore-Search-Fallback-Projects"); got != "lore" {
+		t.Fatalf("expected fallback projects header lore, got %q", got)
+	}
+	fallbackResults := decodeJSON[[]map[string]any](t, fallbackResp)
+	if len(fallbackResults) != 1 {
+		t.Fatalf("expected one fallback postgres search result, got %d", len(fallbackResults))
 	}
 
 	deleteReq, err := http.NewRequest(http.MethodDelete, ts.URL+"/observations/"+strconv.FormatInt(id, 10), nil)

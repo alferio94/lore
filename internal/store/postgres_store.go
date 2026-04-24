@@ -342,11 +342,15 @@ func (s *PostgresStore) RecentObservations(project, scope string, limit int) ([]
 }
 
 func (s *PostgresStore) Search(query string, opts SearchOptions) ([]SearchResult, error) {
-	return nil, s.unsupported("search")
+	outcome, err := s.SearchWithMetadata(query, opts)
+	if err != nil {
+		return nil, err
+	}
+	return outcome.Results, nil
 }
 
 func (s *PostgresStore) SearchWithMetadata(query string, opts SearchOptions) (*SearchWithMetadataResult, error) {
-	return nil, s.unsupported("search with metadata")
+	return executeSearchWithMetadata(query, opts, s.searchExact, s.selectFallbackProjects)
 }
 
 func (s *PostgresStore) GetObservation(id int64) (*Observation, error) {
@@ -551,7 +555,26 @@ func (s *PostgresStore) MigrateProject(string, string) (*MigrateResult, error) {
 	return nil, s.unsupported("project migration")
 }
 func (s *PostgresStore) ListProjectNames() ([]string, error) {
-	return nil, s.unsupported("project listing")
+	rows, err := s.db.Query(`
+		SELECT DISTINCT project
+		FROM observations
+		WHERE project IS NOT NULL AND project != '' AND deleted_at IS NULL
+		ORDER BY project
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		results = append(results, name)
+	}
+	return results, rows.Err()
 }
 func (s *PostgresStore) ListProjectsWithStats() ([]ProjectStats, error) {
 	return nil, s.unsupported("project stats")
@@ -613,6 +636,126 @@ func (s *PostgresStore) withTx(fn func(tx *sql.Tx) error) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *PostgresStore) searchExact(query string, opts SearchOptions) ([]SearchResult, error) {
+	opts.Project = normalizeProjectOnly(opts.Project)
+	limit := clampSearchLimit(s.cfg.MaxSearchResults, opts.Limit)
+
+	var directResults []SearchResult
+	if strings.Contains(query, "/") {
+		rows, err := s.db.Query(`
+			SELECT id, COALESCE(sync_id, '') AS sync_id, session_id, type, title, content, tool_name, project,
+			       scope, topic_key, revision_count, duplicate_count, last_seen_at, created_at, updated_at, deleted_at
+			FROM observations
+			WHERE topic_key = $1
+			  AND deleted_at IS NULL
+			  AND ($2 = '' OR type = $2)
+			  AND ($3 = '' OR project = $3)
+			  AND ($4 = '' OR scope = $4)
+			ORDER BY updated_at DESC
+			LIMIT $5
+		`, query, opts.Type, opts.Project, normalizeScopeMaybe(opts.Scope), limit)
+		if err != nil {
+			return nil, fmt.Errorf("search: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var sr SearchResult
+			if err := rows.Scan(
+				&sr.ID, &sr.SyncID, &sr.SessionID, &sr.Type, &sr.Title, &sr.Content,
+				&sr.ToolName, &sr.Project, &sr.Scope, &sr.TopicKey, &sr.RevisionCount, &sr.DuplicateCount,
+				&sr.LastSeenAt, &sr.CreatedAt, &sr.UpdatedAt, &sr.DeletedAt,
+			); err != nil {
+				return nil, err
+			}
+			sr.Rank = -1000
+			directResults = append(directResults, sr)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	trimmedQuery := strings.TrimSpace(query)
+	if trimmedQuery == "" {
+		if len(directResults) > limit {
+			return directResults[:limit], nil
+		}
+		return directResults, nil
+	}
+
+	searchVector := postgresObservationSearchVector("o")
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT o.id, COALESCE(o.sync_id, '') AS sync_id, o.session_id, o.type, o.title, o.content, o.tool_name, o.project,
+		       o.scope, o.topic_key, o.revision_count, o.duplicate_count, o.last_seen_at, o.created_at, o.updated_at, o.deleted_at,
+		       ts_rank_cd(%s, websearch_to_tsquery('simple', $1)) AS rank
+		FROM observations o
+		WHERE o.deleted_at IS NULL
+		  AND %s @@ websearch_to_tsquery('simple', $1)
+		  AND ($2 = '' OR o.type = $2)
+		  AND ($3 = '' OR o.project = $3)
+		  AND ($4 = '' OR o.scope = $4)
+		ORDER BY rank DESC, o.updated_at DESC
+		LIMIT $5
+	`, searchVector, searchVector), trimmedQuery, opts.Type, opts.Project, normalizeScopeMaybe(opts.Scope), limit)
+	if err != nil {
+		return nil, fmt.Errorf("search: %w", err)
+	}
+	defer rows.Close()
+
+	seen := make(map[int64]bool, len(directResults))
+	results := append([]SearchResult(nil), directResults...)
+	for _, result := range directResults {
+		seen[result.ID] = true
+	}
+
+	for rows.Next() {
+		var sr SearchResult
+		if err := rows.Scan(
+			&sr.ID, &sr.SyncID, &sr.SessionID, &sr.Type, &sr.Title, &sr.Content,
+			&sr.ToolName, &sr.Project, &sr.Scope, &sr.TopicKey, &sr.RevisionCount, &sr.DuplicateCount,
+			&sr.LastSeenAt, &sr.CreatedAt, &sr.UpdatedAt, &sr.DeletedAt,
+			&sr.Rank,
+		); err != nil {
+			return nil, err
+		}
+		if seen[sr.ID] {
+			continue
+		}
+		seen[sr.ID] = true
+		results = append(results, sr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
+}
+
+func (s *PostgresStore) selectFallbackProjects(project string) ([]string, error) {
+	return executeSelectFallbackProjects(project, s.ListProjectNames)
+}
+
+func postgresObservationSearchVector(alias string) string {
+	qualify := func(column string) string {
+		if alias == "" {
+			return column
+		}
+		return alias + "." + column
+	}
+
+	return strings.Join([]string{
+		fmt.Sprintf("setweight(to_tsvector('simple', COALESCE(%s, '')), 'A')", qualify("title")),
+		fmt.Sprintf("setweight(to_tsvector('simple', COALESCE(%s, '')), 'A')", qualify("topic_key")),
+		fmt.Sprintf("setweight(to_tsvector('simple', COALESCE(%s, '')), 'B')", qualify("type")),
+		fmt.Sprintf("setweight(to_tsvector('simple', COALESCE(%s, '')), 'B')", qualify("tool_name")),
+		fmt.Sprintf("setweight(to_tsvector('simple', COALESCE(%s, '')), 'B')", qualify("project")),
+		fmt.Sprintf("setweight(to_tsvector('simple', COALESCE(%s, '')), 'C')", qualify("content")),
+	}, " || ")
 }
 
 func (s *PostgresStore) ensureSyncStateTx(tx *sql.Tx, targetKey string) error {

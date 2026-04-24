@@ -301,4 +301,225 @@ func TestPostgresStoreUnsupportedPromptSliceIntegration(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreSearchParityIntegration(t *testing.T) {
+	s := newPostgresTestStore(t)
+
+	if err := s.CreateSession("pg-search-a", "Lore", "/tmp/lore"); err != nil {
+		t.Fatalf("CreateSession lore: %v", err)
+	}
+	if err := s.CreateSession("pg-search-b", "Lore-Core", "/tmp/lore-core"); err != nil {
+		t.Fatalf("CreateSession lore-core: %v", err)
+	}
+
+	seed := []AddObservationParams{
+		{
+			SessionID: "pg-search-a",
+			Type:      "decision",
+			Title:     "Auth search strongest",
+			Content:   "auth ranking keyword strongest body match",
+			ToolName:  "search-tool",
+			Project:   "Lore",
+			Scope:     "project",
+			TopicKey:  "search/auth-strongest",
+		},
+		{
+			SessionID: "pg-search-a",
+			Type:      "decision",
+			Title:     "Tool name hit",
+			Content:   "secondary content",
+			ToolName:  "auth-runner",
+			Project:   "Lore",
+			Scope:     "project",
+		},
+		{
+			SessionID: "pg-search-b",
+			Type:      "decision",
+			Title:     "Fallback candidate",
+			Content:   "auth fallback metadata keyword",
+			Project:   "Lore-Core",
+			Scope:     "project",
+		},
+		{
+			SessionID: "pg-search-a",
+			Type:      "architecture",
+			Title:     "Scope-only personal",
+			Content:   "auth personal keyword",
+			Project:   "Lore",
+			Scope:     "personal",
+		},
+	}
+
+	var strongestID int64
+	for _, params := range seed {
+		id, err := s.AddObservation(params)
+		if err != nil {
+			t.Fatalf("AddObservation(%s): %v", params.Title, err)
+		}
+		if params.TopicKey == "search/auth-strongest" {
+			strongestID = id
+		}
+	}
+
+	results, err := s.Search("auth", SearchOptions{Project: "Lore", Scope: "project", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search project auth: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatalf("expected at least 2 project search results, got %d", len(results))
+	}
+	if results[0].ID != strongestID {
+		t.Fatalf("expected strongest title/content hit first, got %+v", results)
+	}
+
+	toolResults, err := s.Search("auth-runner", SearchOptions{Project: "Lore", Scope: "project", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search tool_name auth-runner: %v", err)
+	}
+	if len(toolResults) != 1 || toolResults[0].Title != "Tool name hit" {
+		t.Fatalf("expected tool_name match, got %+v", toolResults)
+	}
+
+	topicResults, err := s.Search("search/auth-strongest", SearchOptions{Project: "Lore", Scope: "project", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search topic key: %v", err)
+	}
+	if len(topicResults) == 0 || topicResults[0].ID != strongestID || topicResults[0].Rank != -1000 {
+		t.Fatalf("expected direct topic_key hit to lead results, got %+v", topicResults)
+	}
+	if len(topicResults) > 1 && topicResults[1].ID == strongestID {
+		t.Fatalf("expected topic_key result to be de-duplicated from FTS hits, got %+v", topicResults)
+	}
+
+	personalResults, err := s.Search("personal", SearchOptions{Project: "Lore", Scope: "project", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search personal in project scope: %v", err)
+	}
+	if len(personalResults) != 0 {
+		t.Fatalf("expected personal-scope observation excluded from project search, got %+v", personalResults)
+	}
+
+	if err := s.DeleteObservation(strongestID, false); err != nil {
+		t.Fatalf("DeleteObservation strongest: %v", err)
+	}
+	postDeleteResults, err := s.Search("strongest", SearchOptions{Project: "Lore", Scope: "project", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search strongest after delete: %v", err)
+	}
+	for _, result := range postDeleteResults {
+		if result.ID == strongestID {
+			t.Fatalf("expected deleted observation excluded from search results")
+		}
+	}
+
+	fallback, err := s.SearchWithMetadata("metadata", SearchOptions{Project: "lore-c0re", Scope: "project", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchWithMetadata fallback: %v", err)
+	}
+	if !fallback.Metadata.FallbackUsed {
+		t.Fatalf("expected fallback metadata to be used")
+	}
+	if got := strings.Join(fallback.Metadata.FallbackProjects, ","); got != "lore-core" {
+		t.Fatalf("fallback projects = %q, want lore-core", got)
+	}
+	if len(fallback.Results) != 1 || fallback.Results[0].Project == nil || *fallback.Results[0].Project != "lore-core" {
+		t.Fatalf("expected fallback result from lore-core, got %+v", fallback.Results)
+	}
+
+	names, err := s.ListProjectNames()
+	if err != nil {
+		t.Fatalf("ListProjectNames: %v", err)
+	}
+	if got := strings.Join(names, ","); got != "lore,lore-core" {
+		t.Fatalf("project names = %q, want lore,lore-core", got)
+	}
+}
+
+func TestSearchParityAllowsBackendRankVariance(t *testing.T) {
+	sqlite := newTestStore(t)
+	postgres := newPostgresTestStore(t)
+
+	seedBackend := func(t *testing.T, name string, s Contract) {
+		t.Helper()
+		if err := s.CreateSession(name+"-a", "Lore", "/tmp/lore"); err != nil {
+			t.Fatalf("%s CreateSession lore: %v", name, err)
+		}
+		if err := s.CreateSession(name+"-b", "Lore", "/tmp/lore-alt"); err != nil {
+			t.Fatalf("%s CreateSession lore alt: %v", name, err)
+		}
+
+		for _, params := range []AddObservationParams{
+			{
+				SessionID: name + "-a",
+				Type:      "decision",
+				Title:     "Auth auth strongest",
+				Content:   "auth auth auth ranking keyword strongest body match",
+				ToolName:  "search-tool",
+				Project:   "Lore",
+				Scope:     "project",
+			},
+			{
+				SessionID: name + "-a",
+				Type:      "decision",
+				Title:     "Tool name hit",
+				Content:   "secondary content",
+				ToolName:  "auth-runner",
+				Project:   "Lore",
+				Scope:     "project",
+			},
+			{
+				SessionID: name + "-b",
+				Type:      "decision",
+				Title:     "Body-only auth helper",
+				Content:   "auth helper match in body only",
+				Project:   "Lore",
+				Scope:     "project",
+			},
+		} {
+			if _, err := s.AddObservation(params); err != nil {
+				t.Fatalf("%s AddObservation(%s): %v", name, params.Title, err)
+			}
+		}
+	}
+
+	seedBackend(t, "sqlite", sqlite)
+	seedBackend(t, "postgres", postgres)
+
+	opts := SearchOptions{Project: "Lore", Scope: "project", Limit: 10}
+	sqliteResults, err := sqlite.Search("auth", opts)
+	if err != nil {
+		t.Fatalf("sqlite Search auth: %v", err)
+	}
+	postgresResults, err := postgres.Search("auth", opts)
+	if err != nil {
+		t.Fatalf("postgres Search auth: %v", err)
+	}
+
+	if len(sqliteResults) != 3 || len(postgresResults) != 3 {
+		t.Fatalf("expected 3 search results per backend, got sqlite=%d postgres=%d", len(sqliteResults), len(postgresResults))
+	}
+	if sqliteResults[0].Title != "Auth auth strongest" || postgresResults[0].Title != "Auth auth strongest" {
+		t.Fatalf("expected strongest match first on both backends, got sqlite=%q postgres=%q", sqliteResults[0].Title, postgresResults[0].Title)
+	}
+
+	if sqliteResults[0].Rank == postgresResults[0].Rank {
+		t.Fatalf("expected backend rank values to be allowed to differ at runtime, got equal strongest-match rank %v", sqliteResults[0].Rank)
+	}
+
+	remaining := map[string]bool{
+		"Tool name hit":         true,
+		"Body-only auth helper": true,
+	}
+	for _, results := range [][]SearchResult{sqliteResults[1:], postgresResults[1:]} {
+		seen := map[string]bool{}
+		for _, result := range results {
+			seen[result.Title] = true
+		}
+		for title := range remaining {
+			if !seen[title] {
+				t.Fatalf("expected remaining results to include %q, got %+v", title, results)
+			}
+		}
+	}
+}
+
 var _ = sql.ErrNoRows
