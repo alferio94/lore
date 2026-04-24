@@ -6,9 +6,9 @@
 - [Windows](#windows)
 - [Install from source (macOS / Linux)](#install-from-source-macos--linux)
 - [Download binary (all platforms)](#download-binary-all-platforms)
-- [Requirements](#requirements)
+- [First run](#first-run)
 - [Environment Variables](#environment-variables)
-- [Windows Config Paths](#windows-config-paths)
+- [Local PostgreSQL validation](#local-postgresql-validation)
 
 ---
 
@@ -18,83 +18,37 @@
 brew install alferio94/tap/lore
 ```
 
-Upgrade to latest:
+Upgrade:
 
 ```bash
 brew update && brew upgrade lore
 ```
 
-> **Migrating from Cask?** If you installed lore before v1.0.1, it was distributed as a Cask. Uninstall first, then reinstall:
-> ```bash
-> brew uninstall --cask lore 2>/dev/null; brew install alferio94/tap/lore
-> ```
-
 ---
 
 ## Windows
 
-**Option A: Install via `go install` (recommended for technical users)**
-
-If you have Go installed, this is the cleanest and most trustworthy path — the binary is compiled on your machine from source, so no antivirus will flag it:
+### Option A: `go install`
 
 ```powershell
 go install github.com/alferio94/lore/cmd/lore@latest
-# Binary goes to %GOPATH%\bin\lore.exe (typically %USERPROFILE%\go\bin\)
 ```
 
-Ensure `%GOPATH%\bin` (or `%USERPROFILE%\go\bin`) is on your `PATH`.
-
-**Option B: Build from source**
+### Option B: build from source
 
 ```powershell
 git clone https://github.com/alferio94/lore.git
 cd lore
 go install ./cmd/lore
-# Binary goes to %GOPATH%\bin\lore.exe (typically %USERPROFILE%\go\bin\)
-
-# Optional: build with version stamp (otherwise `lore version` shows "dev")
-$v = git describe --tags --always
-go build -ldflags="-X main.version=local-$v" -o lore.exe ./cmd/lore
 ```
 
-**Option C: Download the prebuilt binary**
+### Option C: download the prebuilt binary
 
-1. Go to [GitHub Releases](https://github.com/alferio94/lore/releases)
-2. Download `lore_<version>_windows_amd64.zip` (or `arm64` for ARM devices)
-3. Extract `lore.exe` to a folder in your `PATH` (e.g. `C:\Users\<you>\bin\`)
-
-```powershell
-# Example: extract and add to PATH (PowerShell)
-Expand-Archive lore_*_windows_amd64.zip -DestinationPath "$env:USERPROFILE\bin"
-# Add to PATH permanently (run once):
-[Environment]::SetEnvironmentVariable("Path", "$env:USERPROFILE\bin;" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")
-```
+Download the latest Windows archive from [GitHub Releases](https://github.com/alferio94/lore/releases).
 
 > **Antivirus false positives on prebuilt binaries**
 >
-> Windows Defender and other antivirus tools (ESET, Brave's built-in scanner) have flagged some
-> lore prebuilt releases as malware (`Trojan:Script/Wacatac.H!ml` or similar). This is a
-> **heuristic false positive**. The binary is built reproducibly from the public source code
-> via GoReleaser and contains no malicious code.
->
-> **Why does this happen?** Prebuilt binaries from small open-source projects are unsigned (code
-> signing certificates cost hundreds of dollars per year). Many AV engines automatically flag
-> unsigned executables from unknown publishers, especially recently compiled Go binaries. The
-> same alert has been observed on Claude Code's own MSIX installer, which confirms this is an
-> AV heuristic issue, not a code problem.
->
-> **Maintainer stance:** We will not pay for a code signing certificate at this time. This is a
-> distribution trust problem, not a security problem. The source code is fully auditable.
->
-> **Recommended workaround:** Technical Windows users should prefer **Option A (`go install`)** or
-> **Option B (build from source)**. Binaries you compile locally will not trigger AV alerts because
-> they originate from your own machine.
-
-> **Other Windows notes:**
-> - Data is stored in `%USERPROFILE%\.lore\lore.db`
-> - Override with `LORE_DATA_DIR` environment variable
-> - All core features work natively: CLI, MCP server, TUI, HTTP API, Git Sync
-> - No WSL required for the core binary — it's a native Windows executable
+> Some Windows AV products flag unsigned binaries from small open-source projects. Lore's release binaries are built from public source, but if your environment is strict, prefer `go install` or a local source build.
 
 ---
 
@@ -104,9 +58,6 @@ Expand-Archive lore_*_windows_amd64.zip -DestinationPath "$env:USERPROFILE\bin"
 git clone https://github.com/alferio94/lore.git
 cd lore
 go install ./cmd/lore
-
-# Optional: build with version stamp (otherwise `lore version` shows "dev")
-go build -ldflags="-X main.version=local-$(git describe --tags --always)" -o lore ./cmd/lore
 ```
 
 ---
@@ -126,12 +77,43 @@ Grab the latest release for your platform from [GitHub Releases](https://github.
 
 ---
 
-## Requirements
+## First run
 
-- **Go 1.25+** to build from source (not needed if installing via Homebrew or downloading a binary)
-- That's it. No runtime dependencies.
+### Shared/cloud runtime
 
-The binary includes SQLite (via [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) — pure Go, no CGO). Works natively on **macOS**, **Linux**, and **Windows** (x86_64 and ARM64).
+Run the hosted/shared surface with:
+
+```bash
+lore serve
+```
+
+For shared deployments, set:
+
+- `DATABASE_URL` for PostgreSQL
+- `LORE_BASE_URL` for the public runtime URL
+- `LORE_JWT_SECRET` for stable admin sessions/auth
+
+### MCP stdio
+
+If your client wants stdio MCP instead of HTTP:
+
+```bash
+lore mcp --tools=agent
+```
+
+### Local mode
+
+If `DATABASE_URL` is unset, Lore uses SQLite automatically. You can optionally browse local data with:
+
+```bash
+lore tui
+```
+
+The TUI is a local convenience surface, not the primary hosted/admin workflow.
+
+### Deprecated setup command
+
+`lore setup [agent]` is still callable only as a compatibility stub. It no longer installs vendor plugins or writes agent config.
 
 ---
 
@@ -139,19 +121,27 @@ The binary includes SQLite (via [modernc.org/sqlite](https://pkg.go.dev/modernc.
 
 | Variable | Description | Default |
 |---|---|---|
-| `LORE_DATA_DIR` | Data directory | `~/.lore` (Windows: `%USERPROFILE%\.lore`) |
-| `LORE_PORT` | Preferred HTTP server port for `lore serve` (highest env precedence) | `7437` |
+| `LORE_DATA_DIR` | Local SQLite data directory | `~/.lore` |
+| `LORE_PORT` | Preferred HTTP server port | `7437` |
 | `PORT` | Cloud-host fallback port when `LORE_PORT` is unset | unset |
-| `DATABASE_URL` | `postgres://` / `postgresql://` selects PostgreSQL; other URLs keep SQLite as default | unset |
+| `DATABASE_URL` | PostgreSQL selects shared runtime storage; other cases keep SQLite active | unset |
+| `LORE_PROJECT` | Override project detection for MCP | auto |
+| `LORE_ENV` | `local` or `staging` | `local` |
+| `LORE_HOST` | Bind host override | `127.0.0.1` local / `0.0.0.0` staging |
+| `LORE_BASE_URL` | Public base URL for hosted/staging runtime | derived locally |
+| `LORE_JWT_SECRET` | JWT secret for admin/auth | generated per process locally if unset |
+| `LORE_COOKIE_SECURE` | Override secure cookie behavior | env-dependent |
+| `LORE_GOOGLE_CLIENT_ID` / `LORE_GOOGLE_CLIENT_SECRET` | Optional Google auth | unset |
+| `LORE_GITHUB_CLIENT_ID` / `LORE_GITHUB_CLIENT_SECRET` | Optional GitHub auth | unset |
 
-Port precedence in `lore serve`: positional argument (`lore serve 9090`) → `LORE_PORT` → `PORT` → `7437`.
-
-Backend selection in `lore serve`:
+Backend selection:
 
 - unset `DATABASE_URL` → SQLite
 - `postgres://...` or `postgresql://...` → PostgreSQL
-- any other valid URL (for example `sqlite:///tmp/lore.db`) → SQLite
+- other valid URLs → SQLite
 - malformed `DATABASE_URL` → startup fails before store initialization
+
+---
 
 ## Local PostgreSQL validation
 
@@ -162,20 +152,4 @@ docker compose -f docker-compose.postgres.yml up -d postgres
 scripts/validate-postgres-local.sh
 ```
 
-The script starts only PostgreSQL in Docker and runs the Go app locally against it. It verifies `/health`, session create/end, and core observation CRUD. Search parity, full app containerization, and deployment wiring remain out of scope for this change.
-
----
-
-## Windows Config Paths
-
-When using `lore setup`, config files are written to platform-appropriate locations:
-
-| Agent | macOS / Linux | Windows |
-|-------|---------------|---------|
-| OpenCode | `~/.config/opencode/` | `%APPDATA%\opencode\` |
-| Gemini CLI | `~/.gemini/` | `%APPDATA%\gemini\` |
-| Codex | `~/.codex/` | `%APPDATA%\codex\` |
-| Claude Code | Managed by `claude` CLI | Managed by `claude` CLI |
-| VS Code | `.vscode/mcp.json` (workspace) or `~/Library/Application Support/Code/User/mcp.json` (user) | `.vscode\mcp.json` (workspace) or `%APPDATA%\Code\User\mcp.json` (user) |
-| Antigravity | `~/.gemini/antigravity/mcp_config.json` | `%USERPROFILE%\.gemini\antigravity\mcp_config.json` |
-| Data directory | `~/.lore/` | `%USERPROFILE%\.lore\` |
+That path validates Lore's shared-runtime backend behavior while still running the Go app locally.

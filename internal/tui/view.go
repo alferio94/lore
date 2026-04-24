@@ -77,8 +77,6 @@ func (m Model) View() string {
 		content = m.viewSessions()
 	case ScreenSessionDetail:
 		content = m.viewSessionDetail()
-	case ScreenSetup:
-		content = m.viewSetup()
 	default:
 		content = "Unknown screen"
 	}
@@ -153,6 +151,8 @@ func (m Model) viewDashboard() string {
 	// Menu
 	b.WriteString(titleStyle.Render("  Actions"))
 	b.WriteString("\n")
+	b.WriteString(timestampStyle.Render("  Local memory browser for SQLite/dev workflows."))
+	b.WriteString("\n\n")
 
 	for i, item := range dashboardMenuItems {
 		if i == m.Cursor {
@@ -174,7 +174,9 @@ func (m Model) viewDashboard() string {
 func (m Model) viewSearch() string {
 	var b strings.Builder
 
-	b.WriteString(headerStyle.Render("  Search Memories"))
+	b.WriteString(headerStyle.Render("  Search Local Memories"))
+	b.WriteString("\n\n")
+	b.WriteString(timestampStyle.Render("  Search the local SQLite/dev store only."))
 	b.WriteString("\n\n")
 
 	b.WriteString(searchInputStyle.Render(m.SearchInput.View()))
@@ -554,125 +556,6 @@ func (m Model) viewSessionDetail() string {
 	}
 
 	b.WriteString(helpStyle.Render("\n  j/k navigate • enter detail • t timeline • esc back"))
-
-	return b.String()
-}
-
-// ─── Setup ───────────────────────────────────────────────────────────────────
-
-func (m Model) viewSetup() string {
-	var b strings.Builder
-
-	b.WriteString(headerStyle.Render("  Setup — Install Agent Plugin"))
-	b.WriteString("\n")
-
-	// Show spinner while installing
-	if m.SetupInstalling {
-		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("  %s Installing %s plugin...\n",
-			m.SetupSpinner.View(),
-			lipgloss.NewStyle().Bold(true).Foreground(colorLavender).Render(m.SetupInstallingName)))
-		b.WriteString("\n")
-
-		switch m.SetupInstallingName {
-		case "opencode":
-			b.WriteString(timestampStyle.Render("  Copying plugin file to plugins directory"))
-		case "claude-code":
-			b.WriteString(timestampStyle.Render("  Running claude plugin marketplace add + install"))
-		}
-
-		b.WriteString("\n")
-		return b.String()
-	}
-
-	// Show allowlist prompt after successful claude-code install
-	if m.SetupAllowlistPrompt && m.SetupResult != nil {
-		successMsg := fmt.Sprintf("Installed %s plugin", m.SetupResult.Agent)
-		b.WriteString(fmt.Sprintf("\n  %s %s\n\n",
-			lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render("✓"),
-			lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render(successMsg)))
-
-		b.WriteString(sectionHeadingStyle.Render("  Permissions Allowlist"))
-		b.WriteString("\n\n")
-		b.WriteString(detailContentStyle.Render("  Add lore tools to ~/.claude/settings.json allowlist?"))
-		b.WriteString("\n")
-		b.WriteString(timestampStyle.Render("  This prevents Claude Code from asking permission on every tool call."))
-		b.WriteString("\n\n")
-		b.WriteString(helpStyle.Render("  [y] Yes  [n] No"))
-		return b.String()
-	}
-
-	// Show result after install
-	if m.SetupDone {
-		if m.SetupError != "" {
-			b.WriteString(errorStyle.Render("  ✗ Installation failed: " + m.SetupError))
-			b.WriteString("\n\n")
-		} else if m.SetupResult != nil {
-			successMsg := fmt.Sprintf("Installed %s plugin", m.SetupResult.Agent)
-			if m.SetupResult.Files > 0 {
-				successMsg += fmt.Sprintf(" (%d files)", m.SetupResult.Files)
-			}
-			b.WriteString(fmt.Sprintf("  %s %s\n",
-				lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render("✓"),
-				lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render(successMsg)))
-			b.WriteString(fmt.Sprintf("  %s %s\n\n",
-				detailLabelStyle.Render("Location:"),
-				projectStyle.Render(m.SetupResult.Destination)))
-
-			// Post-install instructions
-			switch m.SetupResult.Agent {
-			case "opencode":
-				b.WriteString(sectionHeadingStyle.Render("  Next Steps"))
-				b.WriteString("\n")
-				b.WriteString(detailContentStyle.Render("1. Restart OpenCode"))
-				b.WriteString("\n")
-				b.WriteString(detailContentStyle.Render("2. Plugin is auto-loaded from ~/.config/opencode/plugins/"))
-				b.WriteString("\n")
-				b.WriteString(detailContentStyle.Render("3. Make sure 'lore' is in your MCP config (opencode.json)"))
-				b.WriteString("\n")
-			case "claude-code":
-				b.WriteString(sectionHeadingStyle.Render("  Next Steps"))
-				b.WriteString("\n")
-				if m.SetupAllowlistApplied {
-					b.WriteString(fmt.Sprintf("  %s %s\n",
-						lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render("✓"),
-						detailContentStyle.Render("Lore tools added to allowlist")))
-				} else if m.SetupAllowlistError != "" {
-					b.WriteString(fmt.Sprintf("  %s %s\n",
-						lipgloss.NewStyle().Bold(true).Foreground(colorRed).Render("✗"),
-						detailContentStyle.Render("Allowlist update failed: "+m.SetupAllowlistError)))
-					b.WriteString(detailContentStyle.Render("  Add manually to permissions.allow in ~/.claude/settings.json"))
-					b.WriteString("\n")
-				}
-				b.WriteString(detailContentStyle.Render("1. Restart Claude Code — the plugin is active immediately"))
-				b.WriteString("\n")
-				b.WriteString(detailContentStyle.Render("2. Verify with: claude plugin list"))
-				b.WriteString("\n")
-			}
-		}
-
-		b.WriteString(helpStyle.Render("\n  enter/esc back to dashboard"))
-		return b.String()
-	}
-
-	// Agent selection
-	b.WriteString("\n")
-	b.WriteString(titleStyle.Render("  Select an agent to set up"))
-	b.WriteString("\n\n")
-
-	for i, agent := range m.SetupAgents {
-		if i == m.Cursor {
-			b.WriteString(menuSelectedStyle.Render("▸ " + agent.Description))
-		} else {
-			b.WriteString(menuItemStyle.Render("  " + agent.Description))
-		}
-		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("      %s %s\n\n",
-			detailLabelStyle.Render("Install to:"),
-			timestampStyle.Render(agent.InstallDir)))
-	}
-
-	b.WriteString(helpStyle.Render("\n  j/k navigate • enter install • esc back"))
 
 	return b.String()
 }

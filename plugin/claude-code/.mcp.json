@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "lore": {
-      "command": "lore",
-      "args": ["mcp", "--tools=agent"]
-    }
-  }
-}

@@ -10,14 +10,11 @@
 package tui
 
 import (
-	"github.com/alferio94/lore/internal/setup"
 	"github.com/alferio94/lore/internal/store"
 	"github.com/alferio94/lore/internal/version"
 
-	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // ─── Screens ─────────────────────────────────────────────────────────────────
@@ -33,7 +30,6 @@ const (
 	ScreenTimeline
 	ScreenSessions
 	ScreenSessionDetail
-	ScreenSetup
 )
 
 // ─── Custom Messages ─────────────────────────────────────────────────────────
@@ -76,11 +72,6 @@ type recentSessionsMsg struct {
 type sessionObservationsMsg struct {
 	observations []store.Observation
 	err          error
-}
-
-type setupInstallMsg struct {
-	result *setup.Result
-	err    error
 }
 
 type Store interface {
@@ -135,18 +126,6 @@ type Model struct {
 	SelectedSessionIdx  int
 	SessionObservations []store.Observation
 	SessionDetailScroll int
-
-	// Setup
-	SetupAgents           []setup.Agent
-	SetupResult           *setup.Result
-	SetupError            string
-	SetupDone             bool
-	SetupInstalling       bool
-	SetupInstallingName   string // agent name being installed (for display)
-	SetupAllowlistPrompt  bool   // true = showing y/n prompt for allowlist
-	SetupAllowlistApplied bool   // true = allowlist was added successfully
-	SetupAllowlistError   string // error message if allowlist injection failed
-	SetupSpinner          spinner.Model
 }
 
 // New creates a new TUI model connected to the given store.
@@ -156,16 +135,11 @@ func New(s Store, version string) Model {
 	ti.CharLimit = 256
 	ti.Width = 60
 
-	sp := spinner.New()
-	sp.Spinner = spinner.Dot
-	sp.Style = lipgloss.NewStyle().Foreground(colorLavender)
-
 	return Model{
-		store:        s,
-		Version:      version,
-		Screen:       ScreenDashboard,
-		SearchInput:  ti,
-		SetupSpinner: sp,
+		store:       s,
+		Version:     version,
+		Screen:      ScreenDashboard,
+		SearchInput: ti,
 	}
 }
 
@@ -234,13 +208,3 @@ func loadSessionObservations(s Store, sessionID string) tea.Cmd {
 		return sessionObservationsMsg{observations: obs, err: err}
 	}
 }
-
-func installAgent(agentName string) tea.Cmd {
-	return func() tea.Msg {
-		result, err := installAgentFn(agentName)
-		return setupInstallMsg{result: result, err: err}
-	}
-}
-
-var installAgentFn = setup.Install
-var addClaudeCodeAllowlistFn = setup.AddClaudeCodeAllowlist

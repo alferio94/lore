@@ -4,50 +4,33 @@
 
 # Lore
 
-**The agent-agnostic knowledge hub for engineering teams.**
+**Cloud-ready memory, MCP, and admin surfaces for agent teams.**
 
-Lore gives AI agents a shared system of record: persistent memory, reusable skills, project context, and repeatable workflows — all behind one Go binary.
+Lore is a single Go binary that gives agents shared memory, reusable skills, project context, MCP access, and browser-based administration.
 
-Agents stay interchangeable. Team knowledge stays durable. Project state survives across sessions.
-
-## Why Lore
-
-Most agent setups break in predictable ways:
-
-- memory disappears when the session ends
-- conventions live in scattered local files
-- handoffs between agents lose critical context
-- teams repeat the same onboarding and workflow prompts
-
-Lore solves that by centralizing the knowledge your agents should share — without tying you to a single model or coding tool.
+Hosted/runtime workflows come first. SQLite and the terminal UI still exist for local development, demos, tests, and compatibility workflows.
 
 ## What Lore Provides
 
-### Persistent memory
-Store decisions, bug fixes, discoveries, prompts, and structured session summaries in SQLite with full-text search.
+- **Runtime APIs first** — `lore serve` exposes HTTP APIs, `/mcp`, and the admin/browser surface.
+- **MCP for any agent** — `lore mcp` runs stdio MCP without vendor lock-in.
+- **Persistent memory** — decisions, bugs, prompts, and session summaries live in Lore storage.
+- **Shared project context** — agents resume from durable state instead of fragile local context windows.
+- **Local compatibility mode** — SQLite and `lore tui` remain available for local inspection and dev workflows.
 
-### Shared project context
-Recover recent work, prior discussions, and evolving project state without depending on one agent's local context window.
-
-### Team skills
-Serve reusable skill documents for conventions, architecture rules, workflows, and stack-specific guidance.
-
-### Agent-agnostic access
-Use Lore from MCP-compatible agents, the CLI, HTTP integrations, and the terminal UI.
-
-## How It Fits
+## Product Surfaces
 
 ```text
-Claude Code / OpenCode / Codex / Cursor / Windsurf / VS Code / custom MCP clients
-                                   │
-                          MCP, CLI, or HTTP
-                                   │
-                                  Lore
-                                   │
-                        SQLite + FTS5 persistent store
+Agent clients / external configurators / browser admins
+                    │
+          HTTP API, /mcp, MCP stdio
+                    │
+                   Lore
+                    │
+    PostgreSQL for shared/cloud runtime or SQLite for local mode
 ```
 
-Lore is the knowledge layer. Agents consume it; they are not the source of truth.
+Lore owns the runtime contract. Vendor-specific setup, plugin packaging, and configurator UX belong outside this repo.
 
 ## Quick Start
 
@@ -59,67 +42,75 @@ brew install alferio94/tap/lore
 
 Other install options: [docs/INSTALLATION.md](docs/INSTALLATION.md)
 
-### 2) Connect an agent
+### 2) Start the runtime
 
 ```bash
-lore setup opencode
+lore serve
 ```
 
-Also supported: Claude Code, Gemini CLI, Codex, and other MCP-compatible tools. See [docs/AGENT-SETUP.md](docs/AGENT-SETUP.md).
+This starts Lore's HTTP surface, browser-admin surface, and `/mcp` endpoint.
 
-### 3) Start using shared memory
+### 3) Connect your agent
+
+Use Lore through either of these stable integration primitives:
 
 ```bash
-lore mcp
+lore mcp --tools=agent
 ```
 
-Or browse locally with:
+or an HTTP client pointed at your Lore base URL.
+
+See [docs/AGENT-SETUP.md](docs/AGENT-SETUP.md) for the supported integration contract.
+
+### 4) Optional local browsing
 
 ```bash
 lore tui
 ```
 
+The TUI is a local SQLite/dev convenience surface, not the primary onboarding flow.
+
 ## Core Capabilities
 
 | Capability | What it enables |
 | --- | --- |
+| HTTP + admin | Run Lore as a browser-accessible service for operators and teams |
+| MCP | Connect any MCP-compatible agent over stdio or `/mcp` |
 | Memory tools | Save and retrieve decisions, bug fixes, discoveries, prompts, and session summaries |
 | Skills tools | Load shared conventions and workflows on demand |
 | Project context | Recover recent work and maintain continuity across agents and sessions |
-| CLI + TUI | Inspect, search, and manage Lore directly from the terminal |
-| HTTP + MCP | Integrate Lore with local and remote agent setups |
+| Local mode | Inspect or demo Lore with SQLite and the terminal UI |
 | Git sync | Move knowledge across machines with chunked sync workflows |
 
-## Typical Workflow
+## Deployment Modes
 
-1. A lead defines team skills and working rules.
-2. Agents load only the relevant skills for the task.
-3. Important outcomes are persisted to Lore as memory.
-4. The next session or next agent resumes from shared context instead of starting blind.
+- **Shared/cloud runtime**: set `DATABASE_URL` to PostgreSQL and run `lore serve` behind your preferred host.
+- **Local mode**: leave `DATABASE_URL` unset and Lore uses SQLite in `~/.lore`.
+
+Important runtime env vars:
+
+- `DATABASE_URL`
+- `LORE_BASE_URL`
+- `LORE_JWT_SECRET`
+- `LORE_PORT` / `PORT`
+- `LORE_PROJECT`
+
+See [DOCS.md](DOCS.md) and [docs/INSTALLATION.md](docs/INSTALLATION.md) for details.
+
+## Deprecated Setup Note
+
+`lore setup [agent]` is retained only as a compatibility stub. It does **not** install vendor assets or write agent config. Use your external configurator or manual MCP/HTTP wiring instead.
 
 ## Documentation
 
-- [Installation](docs/INSTALLATION.md)
-- [Agent Setup](docs/AGENT-SETUP.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Plugins](docs/PLUGINS.md)
-- [Comparison](docs/COMPARISON.md)
-- [Contributing](CONTRIBUTING.md)
 - [Full Docs](DOCS.md)
-
-## Product Notes
-
-- Single Go binary
-- SQLite + FTS5 storage
-- Local-first by default
-- Works with MCP-compatible agents rather than one vendor-specific client
-
-## Roadmap
-
-- Web admin for skills and project oversight
-- Stronger multi-user and deployment flows
-- Deeper agent setup automation
-- Continued refinement of workflows, memory quality, and team controls
+- [Installation](docs/INSTALLATION.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Agent Integration Primitives](docs/AGENT-SETUP.md)
+- [Integration Ownership](docs/PLUGINS.md)
+- [Comparison](docs/COMPARISON.md)
+- [Security](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## License
 

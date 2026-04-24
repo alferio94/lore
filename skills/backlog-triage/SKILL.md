@@ -27,11 +27,11 @@ These are the non-negotiable product values. Every triage decision is filtered t
 
 | Principle | What it means in practice |
 |-----------|--------------------------|
-| **Zero-config** | Works out of the box. No required flags, env vars, or setup beyond install. |
-| **Local-first** | Data lives in `~/.lore/lore.db`. No cloud dependency by default. |
-| **Single binary** | One `lore` binary. No daemon, no service, no secondary processes needed. |
-| **Terminal-first** | CLI and TUI are the primary UX. No web dashboard, no Electron. |
-| **Thin adapters** | Plugin scripts (Claude, OpenCode, Gemini, Codex) are thin shims — logic lives in Go core. |
+| **Single runtime** | One `lore` binary owns HTTP, `/mcp`, MCP stdio, and admin surfaces. |
+| **Cloud-first boundary** | Shared/runtime deployments are first-class; SQLite/TUI remain local compatibility paths. |
+| **Single binary** | One `lore` binary. No Lore-owned vendor daemon or plugin package should be required. |
+| **Runtime over configurators** | Core value lives in runtime APIs, MCP, storage, and admin; vendor setup belongs outside the repo. |
+| **Thin adapters** | External configurators should stay thin — logic belongs in Go core. |
 | **Issue-first** | Every PR must link a `status:approved` issue. No approved issue → no PR. |
 | **Evidence-based reviews** | Request changes with specific, actionable items. No vague "needs improvement". |
 | **Tight scope** | Reject features that expand Lore's surface area without a compelling case. |
@@ -86,7 +86,7 @@ For every issue, answer:
 2. Is it a clear feature with a problem statement? → candidate for APPROVE ISSUE
 3. Is it vague, a question, or a discussion? → REJECT ISSUE (redirect to Discussions)
 4. Is it a duplicate? → REJECT ISSUE (link original, close)
-5. Does it break zero-config / local-first / single-binary? → REJECT ISSUE
+5. Does it break the cloud-first runtime boundary / single-binary / external-configurator ownership split? → REJECT ISSUE
 6. Does it need architectural decision before a PR? → NEEDS DESIGN
 ```
 
@@ -172,7 +172,7 @@ Output a structured triage report:
 |---|-------|-------------|--------|
 | 93 | Windows false positive (Defender) | APPROVE ISSUE | Real user-facing bug, 3 confirmations |
 | 99 | FTS5 trigram SQL logic error | APPROVE ISSUE | Specific bug, reproducible |
-| 104 | Project aliasing system | NEEDS DESIGN | Scope question: conflicts with local-first project name resolution |
+| 104 | Project aliasing system | NEEDS DESIGN | Scope question: conflicts with runtime-owned project resolution |
 | 97 | Auto-generate docs from memory | REJECT ISSUE | Vague scope, no concrete problem statement |
 | 81 | Remove Projects / local-only notes | REJECT ISSUE | Ambiguous, belongs in Discussions |
 
