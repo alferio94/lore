@@ -10,8 +10,9 @@ import (
 type RuntimeEnv string
 
 const (
-	RuntimeEnvLocal   RuntimeEnv = "local"
-	RuntimeEnvStaging RuntimeEnv = "staging"
+	RuntimeEnvLocal          RuntimeEnv = "local"
+	RuntimeEnvStaging        RuntimeEnv = "staging"
+	minStagingJWTSecretBytes            = 32
 )
 
 type RuntimeConfig struct {
@@ -70,8 +71,14 @@ func loadRuntimeConfig(args []string) (RuntimeConfig, error) {
 	}
 
 	jwtSecret := os.Getenv("LORE_JWT_SECRET")
-	if env == RuntimeEnvStaging && strings.TrimSpace(jwtSecret) == "" {
-		return RuntimeConfig{}, fmt.Errorf("lore config: LORE_JWT_SECRET is required when LORE_ENV=staging")
+	if env == RuntimeEnvStaging {
+		trimmedJWTSecret := strings.TrimSpace(jwtSecret)
+		if trimmedJWTSecret == "" {
+			return RuntimeConfig{}, fmt.Errorf("lore config: LORE_JWT_SECRET is required when LORE_ENV=staging")
+		}
+		if len(trimmedJWTSecret) < minStagingJWTSecretBytes {
+			return RuntimeConfig{}, fmt.Errorf("lore config: LORE_JWT_SECRET must be at least %d bytes when LORE_ENV=staging", minStagingJWTSecretBytes)
+		}
 	}
 
 	return RuntimeConfig{

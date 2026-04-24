@@ -97,6 +97,16 @@ Important runtime env vars:
 
 See [DOCS.md](DOCS.md) and [docs/INSTALLATION.md](docs/INSTALLATION.md) for details.
 
+### Railway preview runtime
+
+The first Railway preview keeps Lore on the existing hosted contract: deploy `lore serve`, back it with Railway PostgreSQL through `DATABASE_URL`, and configure `PORT`, `DATABASE_URL`, `LORE_ENV`, `LORE_BASE_URL`, and `LORE_JWT_SECRET` before exposing the service publicly.
+
+Use `LORE_ENV=staging` for Railway. Railway injects `PORT`; leave `LORE_PORT` unset unless you intentionally need to override the platform port. `DATABASE_URL` must be PostgreSQL, and `LORE_JWT_SECRET` must be persistent and at least 32 bytes. `LORE_BASE_URL` must be the public Railway URL so admin links and callbacks resolve correctly.
+
+After deploy, run a `/health` and `/mcp` smoke check: `curl "$LORE_BASE_URL/health"` should return `200` only when the PostgreSQL-backed store is reachable, and an MCP client should initialize successfully against `"$LORE_BASE_URL/mcp"`.
+
+No web view/dashboard/browser UI expansion, TUI changes, agent configurators/plugins, or production auth/multi-user hardening are included in this preview.
+
 ## Deprecated Setup Note
 
 `lore setup [agent]` is retained only as a compatibility stub. It does **not** install vendor assets or write agent config. Use your external configurator or manual MCP/HTTP wiring instead.

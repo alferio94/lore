@@ -26,10 +26,16 @@ func loadStorageConfig(base store.Config) (StorageConfig, error) {
 	}
 
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if strings.TrimSpace(os.Getenv("LORE_ENV")) == string(RuntimeEnvStaging) && databaseURL == "" {
+		return StorageConfig{}, fmt.Errorf("lore config: DATABASE_URL is required and must use postgres:// or postgresql:// when LORE_ENV=staging")
+	}
 	if databaseURL != "" {
 		parsed, err := validateDatabaseURL(databaseURL)
 		if err != nil {
 			return StorageConfig{}, err
+		}
+		if strings.TrimSpace(os.Getenv("LORE_ENV")) == string(RuntimeEnvStaging) && !isPostgresScheme(parsed.Scheme) {
+			return StorageConfig{}, fmt.Errorf("lore config: DATABASE_URL must use postgres:// or postgresql:// when LORE_ENV=staging")
 		}
 		storageCfg.DatabaseURL = databaseURL
 		if isPostgresScheme(parsed.Scheme) {

@@ -83,9 +83,9 @@ Leave `DATABASE_URL` unset and Lore uses SQLite in `~/.lore` (or `LORE_DATA_DIR`
 | Variable | Description | Default |
 | --- | --- | --- |
 | `LORE_DATA_DIR` | Local SQLite data directory | `~/.lore` |
-| `LORE_PORT` | Preferred port for `lore serve` | `7437` |
+| `LORE_PORT` | Optional port override for `lore serve`; leave unset on Railway | unset |
 | `PORT` | Cloud-host fallback port | unset |
-| `DATABASE_URL` | PostgreSQL for shared runtime; otherwise SQLite remains active | unset |
+| `DATABASE_URL` | PostgreSQL for shared runtime; required to be PostgreSQL in staging | unset |
 | `LORE_PROJECT` | Override MCP project detection | auto-detected |
 
 ### Runtime/admin configuration
@@ -95,7 +95,7 @@ Leave `DATABASE_URL` unset and Lore uses SQLite in `~/.lore` (or `LORE_DATA_DIR`
 | `LORE_ENV` | `local` or `staging` |
 | `LORE_HOST` | Override bind host |
 | `LORE_BASE_URL` | Public base URL for hosted/staging runtime |
-| `LORE_JWT_SECRET` | Required in staging; generated per-process in local mode if unset |
+| `LORE_JWT_SECRET` | Required in staging with at least 32 bytes; generated per-process in local mode if unset |
 | `LORE_COOKIE_SECURE` | Override secure-cookie behavior |
 | `LORE_GOOGLE_CLIENT_ID` / `LORE_GOOGLE_CLIENT_SECRET` | Optional Google auth |
 | `LORE_GITHUB_CLIENT_ID` / `LORE_GITHUB_CLIENT_SECRET` | Optional GitHub auth |
@@ -103,7 +103,8 @@ Leave `DATABASE_URL` unset and Lore uses SQLite in `~/.lore` (or `LORE_DATA_DIR`
 Staging rules:
 
 - `LORE_ENV=staging` requires `LORE_BASE_URL`
-- `LORE_ENV=staging` requires `LORE_JWT_SECRET`
+- `LORE_ENV=staging` requires PostgreSQL `DATABASE_URL`
+- `LORE_ENV=staging` requires `LORE_JWT_SECRET` with at least 32 bytes
 - default host becomes `0.0.0.0`
 
 ## CLI Reference

@@ -42,6 +42,7 @@ func TestDockerStagingRequiredFilesExist(t *testing.T) {
 
 	required := []string{
 		"Dockerfile",
+		"railway.json",
 		"docker-compose.staging.yml",
 		".env.example",
 		".dockerignore",
@@ -54,6 +55,38 @@ func TestDockerStagingRequiredFilesExist(t *testing.T) {
 				t.Fatalf("required file %q is missing: %v", rel, err)
 			}
 		})
+	}
+}
+
+func TestRailwayContractUsesDockerfileBuildAndHealthcheck(t *testing.T) {
+	root := repoRootFromCwd(t)
+	railway := mustReadFile(t, filepath.Join(root, "railway.json"))
+
+	checks := []string{
+		`"builder": "DOCKERFILE"`,
+		`"dockerfilePath": "Dockerfile"`,
+		`"healthcheckPath": "/health"`,
+	}
+
+	for _, check := range checks {
+		check := check
+		t.Run(check, func(t *testing.T) {
+			if !strings.Contains(railway, check) {
+				t.Fatalf("railway.json must include %s", check)
+			}
+		})
+	}
+}
+
+func TestDockerfileKeepsServeEntrypointContractForRailway(t *testing.T) {
+	root := repoRootFromCwd(t)
+	dockerfile := mustReadFile(t, filepath.Join(root, "Dockerfile"))
+
+	if !strings.Contains(dockerfile, `ENTRYPOINT ["/usr/local/bin/lore"]`) {
+		t.Fatalf("Dockerfile must keep lore binary ENTRYPOINT")
+	}
+	if !strings.Contains(dockerfile, `CMD ["serve"]`) {
+		t.Fatalf("Dockerfile must keep serve CMD for Railway runtime")
 	}
 }
 

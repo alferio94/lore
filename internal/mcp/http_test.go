@@ -3,10 +3,15 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+
+	serverpkg "github.com/alferio94/lore/internal/server"
 )
 
 // TestNewHTTPHandlerReturnsNonNil verifies that NewHTTPHandler returns a non-nil
@@ -403,4 +408,157 @@ func TestMCPHTTPCrossTransportDataVisibility(t *testing.T) {
 	if !strings.Contains(text, uniqueTitle) {
 		t.Fatalf("lore_search did not find the saved observation %q in result: %q", uniqueTitle, text)
 	}
+}
+
+func TestMCPHTTPPostgresRoundTripAtServerMCPPath(t *testing.T) {
+	pg := newPostgresMCPTestStore(t)
+	srv := serverpkg.NewWithConfig(pg, serverpkg.Config{Host: "127.0.0.1", Port: 0, Version: "pg-preview"})
+	srv.SetMCPHandler(NewHTTPHandler(pg, "preview-runtime"))
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	initializeResp := postMCPJSON(t, ts.URL+"/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      100,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{},
+			"clientInfo": map[string]any{
+				"name":    "postgres-smoke",
+				"version": "1.0",
+			},
+		},
+	})
+	initializeBody := decodeMCPBody(t, initializeResp)
+	initializeResult, ok := initializeBody["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("initialize result missing: %v", initializeBody)
+	}
+	serverInfo, ok := initializeResult["serverInfo"].(map[string]any)
+	if !ok || serverInfo["name"] != "lore" {
+		t.Fatalf("initialize serverInfo = %v, want lore", initializeResult["serverInfo"])
+	}
+
+	const (
+		project = "preview-runtime"
+		title   = "postgres http smoke marker"
+		content = "Written through /mcp against PostgreSQL preview storage"
+	)
+
+	saveResp := postMCPJSON(t, ts.URL+"/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      101,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "lore_save",
+			"arguments": map[string]any{
+				"title":   title,
+				"content": content,
+				"type":    "discovery",
+				"project": project,
+			},
+		},
+	})
+	saveText := firstMCPText(t, decodeMCPBody(t, saveResp))
+	if !strings.Contains(saveText, fmt.Sprintf("Memory saved: %q", title)) {
+		t.Fatalf("save response = %q, want memory saved confirmation", saveText)
+	}
+
+	searchResp := postMCPJSON(t, ts.URL+"/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      102,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "lore_search",
+			"arguments": map[string]any{
+				"query":   title,
+				"project": project,
+				"limit":   5,
+			},
+		},
+	})
+	searchText := firstMCPText(t, decodeMCPBody(t, searchResp))
+	if !strings.Contains(searchText, title) || !strings.Contains(searchText, "fallback_used=false") {
+		t.Fatalf("search response = %q, want saved title and exact-path fallback metadata", searchText)
+	}
+
+	match := regexp.MustCompile(`(?m)\[1\] #(\d+)`).FindStringSubmatch(searchText)
+	if len(match) != 2 {
+		t.Fatalf("search response = %q, want first observation id", searchText)
+	}
+	observationID, err := strconv.Atoi(match[1])
+	if err != nil {
+		t.Fatalf("parse observation id %q: %v", match[1], err)
+	}
+
+	getResp := postMCPJSON(t, ts.URL+"/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      103,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "lore_get_observation",
+			"arguments": map[string]any{
+				"id": observationID,
+			},
+		},
+	})
+	getText := firstMCPText(t, decodeMCPBody(t, getResp))
+	if !strings.Contains(getText, title) || !strings.Contains(getText, content) || !strings.Contains(getText, "Project: "+project) {
+		t.Fatalf("get response = %q, want stored title/content/project", getText)
+	}
+}
+
+func postMCPJSON(t *testing.T, url string, body map[string]any) *http.Response {
+	t.Helper()
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal MCP request: %v", err)
+	}
+	resp, err := http.Post(url, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		var raw bytes.Buffer
+		_, _ = raw.ReadFrom(resp.Body)
+		t.Fatalf("POST %s: expected HTTP 200, got %d body=%q", url, resp.StatusCode, raw.String())
+	}
+	return resp
+}
+
+func decodeMCPBody(t *testing.T, resp *http.Response) map[string]any {
+	t.Helper()
+	defer resp.Body.Close()
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode MCP response: %v", err)
+	}
+	if errBody, hasErr := body["error"]; hasErr {
+		t.Fatalf("unexpected MCP error: %v", errBody)
+	}
+	return body
+}
+
+func firstMCPText(t *testing.T, body map[string]any) string {
+	t.Helper()
+	resultBody, ok := body["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("result missing from MCP body: %v", body)
+	}
+	content, ok := resultBody["content"].([]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("content missing from MCP body: %v", resultBody)
+	}
+	firstItem, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("content[0] has unexpected type %T", content[0])
+	}
+	text, _ := firstItem["text"].(string)
+	if text == "" {
+		t.Fatalf("expected non-empty text content: %v", firstItem)
+	}
+	return text
 }
