@@ -4137,6 +4137,97 @@ func TestSearchNormalizesProjectFilter(t *testing.T) {
 	}
 }
 
+func TestExecuteSearchWithMetadataSkipsFallbackWhenExactResultsExist(t *testing.T) {
+	requested := SearchOptions{Project: "lore", Limit: 10}
+	exactResults := []SearchResult{{Observation: Observation{ID: 1, Title: "Exact", Scope: "project"}, Rank: -1000}}
+	calledFallback := false
+
+	outcome, err := executeSearchWithMetadata("auth", requested, func(query string, opts SearchOptions) ([]SearchResult, error) {
+		if query != "auth" {
+			t.Fatalf("query = %q, want auth", query)
+		}
+		if opts.Project != requested.Project {
+			t.Fatalf("project = %q, want %q", opts.Project, requested.Project)
+		}
+		return exactResults, nil
+	}, func(string) ([]string, error) {
+		calledFallback = true
+		return []string{"lore-core"}, nil
+	})
+	if err != nil {
+		t.Fatalf("executeSearchWithMetadata: %v", err)
+	}
+	if calledFallback {
+		t.Fatalf("expected exact results to skip fallback selection")
+	}
+	if outcome.Metadata.FallbackUsed {
+		t.Fatalf("expected fallback metadata to remain false")
+	}
+	if len(outcome.Results) != 1 || outcome.Results[0].ID != 1 {
+		t.Fatalf("unexpected exact results: %+v", outcome.Results)
+	}
+	if len(outcome.Metadata.FallbackProjects) != 0 {
+		t.Fatalf("expected no fallback projects, got %v", outcome.Metadata.FallbackProjects)
+	}
+}
+
+func TestExecuteSearchWithMetadataFallsBackDedupesAndHonorsLimit(t *testing.T) {
+	fallbackCalls := []string{}
+	outcome, err := executeSearchWithMetadata("auth", SearchOptions{Project: "lore-c0re", Type: "decision", Scope: "project", Limit: 2}, func(query string, opts SearchOptions) ([]SearchResult, error) {
+		if opts.Project == "lore-c0re" {
+			return nil, nil
+		}
+		fallbackCalls = append(fallbackCalls, opts.Project)
+		switch opts.Project {
+		case "lore-core":
+			return []SearchResult{
+				{Observation: Observation{ID: 1, Title: "Topic hit", Scope: "project"}, Rank: -1000},
+			}, nil
+		case "lore-cli":
+			return []SearchResult{
+				{Observation: Observation{ID: 1, Title: "Topic hit", Scope: "project"}, Rank: -1000},
+				{Observation: Observation{ID: 2, Title: "Content hit", Scope: "project"}, Rank: 0.2},
+			}, nil
+		default:
+			return nil, nil
+		}
+	}, func(project string) ([]string, error) {
+		if project != "lore-c0re" {
+			t.Fatalf("fallback project lookup = %q, want lore-c0re", project)
+		}
+		return []string{"lore-core", "lore-cli"}, nil
+	})
+	if err != nil {
+		t.Fatalf("executeSearchWithMetadata: %v", err)
+	}
+	if !outcome.Metadata.FallbackUsed {
+		t.Fatalf("expected fallback to be used")
+	}
+	if got := strings.Join(outcome.Metadata.FallbackProjects, ","); got != "lore-core,lore-cli" {
+		t.Fatalf("fallback projects = %q, want lore-core,lore-cli", got)
+	}
+	if got := strings.Join(fallbackCalls, ","); got != "lore-core,lore-cli" {
+		t.Fatalf("fallback search order = %q, want lore-core,lore-cli", got)
+	}
+	if len(outcome.Results) != 2 {
+		t.Fatalf("expected limit=2 to be honored, got %d results", len(outcome.Results))
+	}
+	if outcome.Results[0].ID != 1 || outcome.Results[1].ID != 2 {
+		t.Fatalf("unexpected deduped fallback results: %+v", outcome.Results)
+	}
+}
+
+func TestExecuteSearchWithMetadataReturnsFallbackCandidateError(t *testing.T) {
+	_, err := executeSearchWithMetadata("auth", SearchOptions{Project: "lore-c0re", Limit: 10}, func(string, SearchOptions) ([]SearchResult, error) {
+		return nil, nil
+	}, func(string) ([]string, error) {
+		return nil, errors.New("forced fallback candidate failure")
+	})
+	if err == nil || !strings.Contains(err.Error(), "search fallback candidates: forced fallback candidate failure") {
+		t.Fatalf("expected fallback candidate error, got %v", err)
+	}
+}
+
 func TestSearchWithMetadataExactProjectHitSkipsFallback(t *testing.T) {
 	s := newTestStore(t)
 

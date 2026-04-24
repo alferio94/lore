@@ -1346,69 +1346,14 @@ func (s *Store) Search(query string, opts SearchOptions) ([]SearchResult, error)
 }
 
 func (s *Store) SearchWithMetadata(query string, opts SearchOptions) (*SearchWithMetadataResult, error) {
-	exactResults, err := s.searchExact(query, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	outcome := &SearchWithMetadataResult{Results: exactResults}
-	if opts.Project == "" || len(exactResults) > 0 {
-		return outcome, nil
-	}
-
-	candidates, err := s.selectFallbackProjects(opts.Project)
-	if err != nil {
-		return nil, fmt.Errorf("search fallback candidates: %w", err)
-	}
-	if len(candidates) == 0 {
-		return outcome, nil
-	}
-
-	outcome.Metadata.FallbackUsed = true
-	outcome.Metadata.FallbackProjects = append([]string(nil), candidates...)
-
-	combined := make([]SearchResult, 0, opts.Limit)
-	seen := make(map[int64]bool)
-	for _, candidate := range candidates {
-		fallbackResults, err := s.searchExact(query, SearchOptions{
-			Type:    opts.Type,
-			Project: candidate,
-			Scope:   opts.Scope,
-			Limit:   opts.Limit,
-		})
-		if err != nil {
-			return nil, err
-		}
-		for _, result := range fallbackResults {
-			if seen[result.ID] {
-				continue
-			}
-			seen[result.ID] = true
-			combined = append(combined, result)
-		}
-		if opts.Limit > 0 && len(combined) >= opts.Limit {
-			break
-		}
-	}
-
-	if opts.Limit > 0 && len(combined) > opts.Limit {
-		combined = combined[:opts.Limit]
-	}
-	outcome.Results = combined
-	return outcome, nil
+	return executeSearchWithMetadata(query, opts, s.searchExact, s.selectFallbackProjects)
 }
 
 func (s *Store) searchExact(query string, opts SearchOptions) ([]SearchResult, error) {
 	// Normalize project filter so "Engram" finds records stored as "engram"
 	opts.Project, _ = NormalizeProject(opts.Project)
 
-	limit := opts.Limit
-	if limit <= 0 {
-		limit = 10
-	}
-	if limit > s.cfg.MaxSearchResults {
-		limit = s.cfg.MaxSearchResults
-	}
+	limit := clampSearchLimit(s.cfg.MaxSearchResults, opts.Limit)
 
 	var directResults []SearchResult
 	if strings.Contains(query, "/") {
@@ -1523,12 +1468,68 @@ func (s *Store) searchExact(query string, opts SearchOptions) ([]SearchResult, e
 }
 
 func (s *Store) selectFallbackProjects(project string) ([]string, error) {
+	return executeSelectFallbackProjects(project, s.ListProjectNames)
+}
+
+func executeSearchWithMetadata(query string, opts SearchOptions, searchExact func(string, SearchOptions) ([]SearchResult, error), selectFallbackProjects func(string) ([]string, error)) (*SearchWithMetadataResult, error) {
+	exactResults, err := searchExact(query, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	outcome := &SearchWithMetadataResult{Results: exactResults}
+	if opts.Project == "" || len(exactResults) > 0 {
+		return outcome, nil
+	}
+
+	candidates, err := selectFallbackProjects(opts.Project)
+	if err != nil {
+		return nil, fmt.Errorf("search fallback candidates: %w", err)
+	}
+	if len(candidates) == 0 {
+		return outcome, nil
+	}
+
+	outcome.Metadata.FallbackUsed = true
+	outcome.Metadata.FallbackProjects = append([]string(nil), candidates...)
+
+	limit := clampSearchLimit(0, opts.Limit)
+	combined := make([]SearchResult, 0, limit)
+	seen := make(map[int64]bool)
+	for _, candidate := range candidates {
+		fallbackResults, err := searchExact(query, SearchOptions{
+			Type:    opts.Type,
+			Project: candidate,
+			Scope:   opts.Scope,
+			Limit:   limit,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, result := range fallbackResults {
+			if seen[result.ID] {
+				continue
+			}
+			seen[result.ID] = true
+			combined = append(combined, result)
+			if len(combined) >= limit {
+				outcome.Results = combined[:limit]
+				return outcome, nil
+			}
+		}
+	}
+
+	outcome.Results = combined
+	return outcome, nil
+}
+
+func executeSelectFallbackProjects(project string, listProjectNames func() ([]string, error)) ([]string, error) {
 	project, _ = NormalizeProject(project)
 	if project == "" {
 		return nil, nil
 	}
 
-	existingNames, err := s.ListProjectNames()
+	existingNames, err := listProjectNames()
 	if err != nil {
 		return nil, err
 	}
@@ -1568,6 +1569,17 @@ func (s *Store) selectFallbackProjects(project string) ([]string, error) {
 		results = append(results, match.name)
 	}
 	return results, nil
+}
+
+func clampSearchLimit(maxSearchResults int, requested int) int {
+	limit := requested
+	if limit <= 0 {
+		limit = 10
+	}
+	if maxSearchResults > 0 && limit > maxSearchResults {
+		limit = maxSearchResults
+	}
+	return limit
 }
 
 func similarityScore(query string, match projectpkg.ProjectMatch) float64 {

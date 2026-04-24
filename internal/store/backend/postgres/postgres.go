@@ -105,6 +105,7 @@ func Bootstrap(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_pg_obs_created ON observations(created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_pg_obs_topic_project_scope ON observations(topic_key, project, scope)`,
 		`CREATE INDEX IF NOT EXISTS idx_pg_obs_hash_project_scope ON observations(normalized_hash, project, scope)`,
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_pg_obs_search_vector ON observations USING GIN ((%s))`, observationSearchVectorExpression()),
 		`CREATE TABLE IF NOT EXISTS sync_state (
 			target_key TEXT PRIMARY KEY,
 			lifecycle TEXT NOT NULL DEFAULT 'idle',
@@ -149,6 +150,17 @@ func Bootstrap(db *sql.DB) error {
 	}
 
 	return nil
+}
+
+func observationSearchVectorExpression() string {
+	return strings.Join([]string{
+		"setweight(to_tsvector('simple', COALESCE(title, '')), 'A')",
+		"setweight(to_tsvector('simple', COALESCE(topic_key, '')), 'A')",
+		"setweight(to_tsvector('simple', COALESCE(type, '')), 'B')",
+		"setweight(to_tsvector('simple', COALESCE(tool_name, '')), 'B')",
+		"setweight(to_tsvector('simple', COALESCE(project, '')), 'B')",
+		"setweight(to_tsvector('simple', COALESCE(content, '')), 'C')",
+	}, " || ")
 }
 
 func isLocalHost(host string) bool {
