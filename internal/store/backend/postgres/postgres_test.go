@@ -83,6 +83,17 @@ func TestOpenDatabaseBootstrapsIdempotently(t *testing.T) {
 	statements := strings.Join(stubExecutedStatements(name), "\n")
 	for _, needle := range []string{
 		"idx_pg_obs_search_vector",
+		"CREATE TABLE IF NOT EXISTS skills",
+		"CREATE TABLE IF NOT EXISTS stacks",
+		"CREATE TABLE IF NOT EXISTS categories",
+		"CREATE TABLE IF NOT EXISTS skill_stacks",
+		"CREATE TABLE IF NOT EXISTS skill_categories",
+		"CREATE TABLE IF NOT EXISTS skill_versions",
+		"CREATE TABLE IF NOT EXISTS users",
+		"idx_pg_skills_search_vector",
+		"idx_pg_skill_versions_skill_version_unique",
+		"idx_pg_skill_versions_skill",
+		"idx_pg_users_role",
 		"to_tsvector('simple'",
 		"setweight(",
 		"USING GIN",

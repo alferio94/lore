@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	postgresbackend "github.com/alferio94/lore/internal/store/backend/postgres"
 	"github.com/ory/dockertest/v3"
 	"github.com/ory/dockertest/v3/docker"
 )
@@ -81,14 +84,52 @@ func TestPostgresStoreBootstrapAndPingIntegration(t *testing.T) {
 		t.Fatalf("Ping() error = %v", err)
 	}
 
-	for _, table := range []string{"sessions", "observations", "sync_state", "sync_mutations"} {
-		var exists bool
-		if err := s.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)`, table).Scan(&exists); err != nil {
-			t.Fatalf("check table %s: %v", table, err)
-		}
-		if !exists {
-			t.Fatalf("expected table %s to exist", table)
-		}
+	if _, err := s.db.Exec(`INSERT INTO sessions (id, project, directory) VALUES ($1, $2, $3)`, "bootstrap-existing", "Lore", "/tmp/lore"); err != nil {
+		t.Fatalf("seed existing runtime row: %v", err)
+	}
+
+	if err := postgresbackend.Bootstrap(s.db); err != nil {
+		t.Fatalf("Bootstrap() rerun error = %v", err)
+	}
+
+	for _, table := range []string{"sessions", "observations", "sync_state", "sync_mutations", "skills", "stacks", "categories", "skill_stacks", "skill_categories", "skill_versions", "users"} {
+		assertPostgresTableExists(t, s.db, table)
+	}
+
+	for _, index := range []string{"idx_pg_obs_search_vector", "idx_pg_skills_name", "idx_pg_skills_active", "idx_pg_stacks_name", "idx_pg_categories_name", "idx_pg_skill_stacks_stack", "idx_pg_skill_categories_category", "idx_pg_skill_versions_skill", "idx_pg_users_email", "idx_pg_users_role", "idx_pg_skills_search_vector"} {
+		assertPostgresIndexExists(t, s.db, index)
+	}
+
+	var project string
+	if err := s.db.QueryRow(`SELECT project FROM sessions WHERE id = $1`, "bootstrap-existing").Scan(&project); err != nil {
+		t.Fatalf("load seeded runtime row: %v", err)
+	}
+	if project != "Lore" {
+		t.Fatalf("seeded runtime row project = %q, want Lore", project)
+	}
+}
+
+func assertPostgresTableExists(t *testing.T, db *sql.DB, table string) {
+	t.Helper()
+
+	var exists bool
+	if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)`, table).Scan(&exists); err != nil {
+		t.Fatalf("check table %s: %v", table, err)
+	}
+	if !exists {
+		t.Fatalf("expected table %s to exist", table)
+	}
+}
+
+func assertPostgresIndexExists(t *testing.T, db *sql.DB, index string) {
+	t.Helper()
+
+	var exists bool
+	if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1)`, index).Scan(&exists); err != nil {
+		t.Fatalf("check index %s: %v", index, err)
+	}
+	if !exists {
+		t.Fatalf("expected index %s to exist", index)
 	}
 }
 
@@ -519,6 +560,347 @@ func TestSearchParityAllowsBackendRankVariance(t *testing.T) {
 				t.Fatalf("expected remaining results to include %q, got %+v", title, results)
 			}
 		}
+	}
+}
+
+func TestPostgresStoreUserLifecycleIntegration(t *testing.T) {
+	s := newPostgresTestStore(t)
+
+	first, err := s.UpsertUser("first@example.com", "First", "https://example.com/first.png", "google")
+	if err != nil {
+		t.Fatalf("UpsertUser(first): %v", err)
+	}
+	if first.Role != "admin" {
+		t.Fatalf("first role = %q, want admin", first.Role)
+	}
+
+	second, err := s.UpsertUser("second@example.com", "Second", "", "github")
+	if err != nil {
+		t.Fatalf("UpsertUser(second): %v", err)
+	}
+	if second.Role != "viewer" {
+		t.Fatalf("second role = %q, want viewer", second.Role)
+	}
+
+	promoted, err := s.UpdateUserRole(second.ID, "tech_lead")
+	if err != nil {
+		t.Fatalf("UpdateUserRole(second): %v", err)
+	}
+	if promoted.Role != "tech_lead" {
+		t.Fatalf("promoted role = %q, want tech_lead", promoted.Role)
+	}
+
+	relogin, err := s.UpsertUser("second@example.com", "Second Renamed", "https://example.com/second.png", "github")
+	if err != nil {
+		t.Fatalf("UpsertUser(relogin): %v", err)
+	}
+	if relogin.ID != second.ID {
+		t.Fatalf("relogin id = %d, want %d", relogin.ID, second.ID)
+	}
+	if relogin.Role != "tech_lead" {
+		t.Fatalf("relogin role = %q, want tech_lead", relogin.Role)
+	}
+	if relogin.Name != "Second Renamed" {
+		t.Fatalf("relogin name = %q, want Second Renamed", relogin.Name)
+	}
+	if relogin.AvatarURL != "https://example.com/second.png" {
+		t.Fatalf("relogin avatar = %q, want updated avatar", relogin.AvatarURL)
+	}
+
+	users, err := s.ListUsers()
+	if err != nil {
+		t.Fatalf("ListUsers(): %v", err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("ListUsers len = %d, want 2", len(users))
+	}
+	if users[0].Email != "first@example.com" || users[1].Email != "second@example.com" {
+		t.Fatalf("ListUsers order = %+v, want first then second", users)
+	}
+
+	if _, err := s.UpdateUserRole(99999, "admin"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("UpdateUserRole(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestPostgresStoreUpsertUserAssignsSingleAdminConcurrently(t *testing.T) {
+	s := newPostgresTestStore(t)
+
+	const totalUsers = 12
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make(chan error, totalUsers)
+
+	for i := 0; i < totalUsers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := s.UpsertUser(fmt.Sprintf("concurrent-%02d@example.com", i), fmt.Sprintf("User %02d", i), "", "test")
+			errs <- err
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("UpsertUser concurrent error: %v", err)
+		}
+	}
+
+	users, err := s.ListUsers()
+	if err != nil {
+		t.Fatalf("ListUsers(): %v", err)
+	}
+	if len(users) != totalUsers {
+		t.Fatalf("ListUsers len = %d, want %d", len(users), totalUsers)
+	}
+
+	adminCount := 0
+	for _, user := range users {
+		if user.Role == "admin" {
+			adminCount++
+		}
+	}
+	if adminCount != 1 {
+		t.Fatalf("admin user count = %d, want 1; users=%+v", adminCount, users)
+	}
+}
+
+func TestPostgresStoreStatsAndSearchParityIntegration(t *testing.T) {
+	s := newPostgresTestStore(t)
+	now := time.Now().UTC()
+
+	if err := s.CreateSession("stats-recent", "Lore", "/tmp/lore"); err != nil {
+		t.Fatalf("CreateSession(stats-recent): %v", err)
+	}
+	if err := s.CreateSession("stats-old", "Lore", "/tmp/lore-old"); err != nil {
+		t.Fatalf("CreateSession(stats-old): %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE sessions SET started_at = $1 WHERE id = $2`, now.Add(-8*24*time.Hour).Format("2006-01-02 15:04:05"), "stats-old"); err != nil {
+		t.Fatalf("age old session: %v", err)
+	}
+
+	stack, err := s.CreateStack("go", "Go")
+	if err != nil {
+		t.Fatalf("CreateStack(): %v", err)
+	}
+	category, err := s.CreateCategory("backend", "Backend")
+	if err != nil {
+		t.Fatalf("CreateCategory(): %v", err)
+	}
+
+	created, err := s.CreateSkill(CreateSkillParams{
+		Name:         "postgres-search",
+		DisplayName:  "Postgres Search",
+		StackIDs:     []int64{stack.ID},
+		CategoryIDs:  []int64{category.ID},
+		Triggers:     "postgres search parity",
+		Content:      "Search inclusion over postgres content",
+		CompactRules: "Prefer deterministic inclusion checks",
+		ChangedBy:    "slice-c",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill(): %v", err)
+	}
+	if _, err := s.CreateSkill(CreateSkillParams{
+		Name:         "inactive-skill",
+		DisplayName:  "Inactive Skill",
+		Triggers:     "archived",
+		Content:      "should disappear from active lists",
+		CompactRules: "",
+		ChangedBy:    "slice-c",
+	}); err != nil {
+		t.Fatalf("CreateSkill(inactive): %v", err)
+	}
+	if err := s.DeleteSkill("inactive-skill", "slice-c"); err != nil {
+		t.Fatalf("DeleteSkill(inactive): %v", err)
+	}
+
+	updatedContent := "Search inclusion over postgres content and admin stats"
+	updatedRules := "Prefer inclusion/filter checks over rank lockstep"
+	updated, err := s.UpdateSkill("postgres-search", UpdateSkillParams{
+		Content:      &updatedContent,
+		CompactRules: &updatedRules,
+		ChangedBy:    "slice-c",
+	})
+	if err != nil {
+		t.Fatalf("UpdateSkill(): %v", err)
+	}
+	if updated.Version != 2 {
+		t.Fatalf("updated version = %d, want 2", updated.Version)
+	}
+
+	var versions int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM skill_versions WHERE skill_id = $1`, created.ID).Scan(&versions); err != nil {
+		t.Fatalf("count skill_versions: %v", err)
+	}
+	if versions != 2 {
+		t.Fatalf("skill_versions count = %d, want 2", versions)
+	}
+
+	searchResults, err := s.ListSkills(ListSkillsParams{Query: "postgres admin stats"})
+	if err != nil {
+		t.Fatalf("ListSkills(search): %v", err)
+	}
+	if len(searchResults) != 1 || searchResults[0].Name != "postgres-search" {
+		t.Fatalf("ListSkills(search) = %+v, want only postgres-search", searchResults)
+	}
+
+	if err := s.DeleteStack(stack.ID); err != nil {
+		t.Fatalf("DeleteStack(): %v", err)
+	}
+	if err := s.DeleteCategory(category.ID); err != nil {
+		t.Fatalf("DeleteCategory(): %v", err)
+	}
+
+	reloaded, err := s.GetSkill("postgres-search")
+	if err != nil {
+		t.Fatalf("GetSkill(after cascades): %v", err)
+	}
+	if len(reloaded.Stacks) != 0 || len(reloaded.Categories) != 0 {
+		t.Fatalf("GetSkill relationships after cascades = stacks:%+v categories:%+v, want both empty", reloaded.Stacks, reloaded.Categories)
+	}
+
+	obsID, err := s.AddObservation(AddObservationParams{
+		SessionID: "stats-recent",
+		Type:      "decision",
+		Title:     "fresh",
+		Content:   "fresh content",
+		Project:   "Lore",
+		Scope:     "project",
+	})
+	if err != nil {
+		t.Fatalf("AddObservation(fresh): %v", err)
+	}
+	if _, err := s.AddObservation(AddObservationParams{
+		SessionID: "stats-recent",
+		Type:      "decision",
+		Title:     "active project",
+		Content:   "counts toward stats",
+		Project:   "Lore-Admin",
+		Scope:     "project",
+	}); err != nil {
+		t.Fatalf("AddObservation(second project): %v", err)
+	}
+	if _, err := s.AddObservation(AddObservationParams{
+		SessionID: "stats-old",
+		Type:      "decision",
+		Title:     "old observation",
+		Content:   "should fall out of weekly count",
+		Project:   "Lore",
+		Scope:     "project",
+	}); err != nil {
+		t.Fatalf("AddObservation(old): %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE observations SET created_at = $1, updated_at = $1 WHERE title = $2`, now.Add(-8*24*time.Hour).Format("2006-01-02 15:04:05"), "old observation"); err != nil {
+		t.Fatalf("age old observation: %v", err)
+	}
+	if err := s.DeleteObservation(obsID, false); err != nil {
+		t.Fatalf("DeleteObservation(fresh): %v", err)
+	}
+
+	stats, err := s.AdminStats()
+	if err != nil {
+		t.Fatalf("AdminStats(): %v", err)
+	}
+	if stats.ActiveProjects != 2 {
+		t.Fatalf("ActiveProjects = %d, want 2", stats.ActiveProjects)
+	}
+	if stats.ActiveSkills != 1 {
+		t.Fatalf("ActiveSkills = %d, want 1", stats.ActiveSkills)
+	}
+	if stats.ObservationsThisWeek != 1 {
+		t.Fatalf("ObservationsThisWeek = %d, want 1", stats.ObservationsThisWeek)
+	}
+	if stats.SessionsThisWeek != 1 {
+		t.Fatalf("SessionsThisWeek = %d, want 1", stats.SessionsThisWeek)
+	}
+
+	if err := s.DeleteSkill("postgres-search", "slice-c"); err != nil {
+		t.Fatalf("DeleteSkill(postgres-search): %v", err)
+	}
+	searchResults, err = s.ListSkills(ListSkillsParams{Query: "postgres admin stats"})
+	if err != nil {
+		t.Fatalf("ListSkills(search after delete): %v", err)
+	}
+	if len(searchResults) != 0 {
+		t.Fatalf("ListSkills(search after delete) = %+v, want empty", searchResults)
+	}
+
+	var isActive bool
+	if err := s.db.QueryRow(`SELECT is_active FROM skills WHERE name = $1`, "postgres-search").Scan(&isActive); err != nil {
+		t.Fatalf("load soft-deleted skill row: %v", err)
+	}
+	if isActive {
+		t.Fatal("expected soft-deleted skill row to remain with is_active=false")
+	}
+}
+
+func TestPostgresStoreUpdateSkillSerializesConcurrentVersionHistory(t *testing.T) {
+	s := newPostgresTestStore(t)
+
+	created, err := s.CreateSkill(CreateSkillParams{
+		Name:         "concurrent-version-skill",
+		DisplayName:  "Concurrent Version Skill",
+		Triggers:     "concurrent update",
+		Content:      "initial content",
+		CompactRules: "initial rules",
+		ChangedBy:    "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill(): %v", err)
+	}
+
+	const updates = 10
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make(chan error, updates)
+
+	for i := 0; i < updates; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			content := fmt.Sprintf("updated content %02d", i)
+			_, err := s.UpdateSkill("concurrent-version-skill", UpdateSkillParams{
+				Content:   &content,
+				ChangedBy: "test",
+			})
+			errs <- err
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("UpdateSkill concurrent error: %v", err)
+		}
+	}
+
+	reloaded, err := s.GetSkill("concurrent-version-skill")
+	if err != nil {
+		t.Fatalf("GetSkill(): %v", err)
+	}
+	if reloaded.Version != updates+1 {
+		t.Fatalf("skill version = %d, want %d", reloaded.Version, updates+1)
+	}
+
+	var versionRows int
+	var distinctVersions int
+	if err := s.db.QueryRow(`SELECT COUNT(*), COUNT(DISTINCT version) FROM skill_versions WHERE skill_id = $1`, created.ID).Scan(&versionRows, &distinctVersions); err != nil {
+		t.Fatalf("count skill_versions: %v", err)
+	}
+	if versionRows != updates+1 || distinctVersions != updates+1 {
+		t.Fatalf("skill_versions rows=%d distinct_versions=%d, want %d", versionRows, distinctVersions, updates+1)
 	}
 }
 

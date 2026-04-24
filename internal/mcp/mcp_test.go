@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	serverpkg "github.com/alferio94/lore/internal/server"
 	"github.com/alferio94/lore/internal/store"
 	mcppkg "github.com/mark3labs/mcp-go/mcp"
 	"github.com/ory/dockertest/v3"
@@ -2122,7 +2124,7 @@ func TestHandleSaveDefaultProjectDoesNotOverrideExplicit(t *testing.T) {
 // seedSkill is a test helper that creates a skill in the store.
 // stack and category parameters are retained for signature compatibility with
 // existing call sites but are not yet used — catalog IDs are set in Phase 3/4.
-func seedSkill(t *testing.T, s *store.Store, name, displayName, stack, category, triggers, content string) {
+func seedSkill(t *testing.T, s store.Contract, name, displayName, stack, category, triggers, content string) {
 	t.Helper()
 	_, err := s.CreateSkill(store.CreateSkillParams{
 		Name:        name,
@@ -2140,7 +2142,7 @@ func seedSkill(t *testing.T, s *store.Store, name, displayName, stack, category,
 }
 
 // seedSkillWithCatalog creates a skill with actual stack/category catalog relationships.
-func seedSkillWithCatalog(t *testing.T, s *store.Store, name, displayName string, stackIDs, categoryIDs []int64, triggers, content string) {
+func seedSkillWithCatalog(t *testing.T, s store.Contract, name, displayName string, stackIDs, categoryIDs []int64, triggers, content string) {
 	t.Helper()
 	_, err := s.CreateSkill(store.CreateSkillParams{
 		Name:        name,
@@ -2375,6 +2377,61 @@ func TestHandleListSkillsResponseHasStacksArray(t *testing.T) {
 	}
 }
 
+func TestHandleListSkillsPostgresHostedPath(t *testing.T) {
+	pg := newPostgresMCPTestStore(t)
+
+	goStack, err := pg.CreateStack("go", "Go")
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+	patterns, err := pg.CreateCategory("patterns", "Patterns")
+	if err != nil {
+		t.Fatalf("CreateCategory: %v", err)
+	}
+
+	seedSkillWithCatalog(t, pg, "pg-hosted-list", "Hosted Postgres List", []int64{goStack.ID}, []int64{patterns.ID}, "When validating hosted postgres MCP", "# hidden list content")
+
+	srv := serverpkg.NewWithConfig(pg, serverpkg.Config{Host: "127.0.0.1", Port: 0, Version: "pg-smoke"})
+	srv.SetMCPHandler(NewHTTPHandler(pg, "postgres-runtime"))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	_ = decodeMCPBody(t, postMCPJSON(t, ts.URL+"/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{},
+			"clientInfo": map[string]any{
+				"name":    "postgres-hosted-list",
+				"version": "1.0",
+			},
+		},
+	}))
+
+	text := firstMCPText(t, decodeMCPBody(t, postMCPJSON(t, ts.URL+"/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "lore_list_skills",
+			"arguments": map[string]any{
+				"query": "hosted postgres MCP",
+			},
+		},
+	})))
+	if !strings.Contains(text, "pg-hosted-list") {
+		t.Fatalf("expected Postgres-backed skill in output, got %q", text)
+	}
+	if !strings.Contains(text, `"stacks"`) || !strings.Contains(text, `"categories"`) {
+		t.Fatalf("expected catalog arrays in list output, got %q", text)
+	}
+	if strings.Contains(text, "hidden list content") || strings.Contains(text, `"compact_rules"`) {
+		t.Fatalf("list output should stay metadata-only, got %q", text)
+	}
+}
+
 // ─── 4.3: lore_get_skill handler tests ───────────────────────────────────────
 
 func TestHandleGetSkillFound(t *testing.T) {
@@ -2511,6 +2568,70 @@ func TestHandleGetSkillEmptyArraysWhenNoRelationships(t *testing.T) {
 	}
 }
 
+func TestHandleGetSkillPostgresHostedPath(t *testing.T) {
+	pg := newPostgresMCPTestStore(t)
+
+	goStack, err := pg.CreateStack("go", "Go")
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+	patterns, err := pg.CreateCategory("patterns", "Patterns")
+	if err != nil {
+		t.Fatalf("CreateCategory: %v", err)
+	}
+
+	_, err = pg.CreateSkill(store.CreateSkillParams{
+		Name:         "pg-hosted-get",
+		DisplayName:  "Hosted Postgres Get",
+		StackIDs:     []int64{goStack.ID},
+		CategoryIDs:  []int64{patterns.ID},
+		Triggers:     "When validating hosted postgres skill reads",
+		Content:      "# postgres skill body",
+		CompactRules: "Return terse bullets.",
+		ChangedBy:    "test",
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	srv := serverpkg.NewWithConfig(pg, serverpkg.Config{Host: "127.0.0.1", Port: 0, Version: "pg-smoke"})
+	srv.SetMCPHandler(NewHTTPHandler(pg, "postgres-runtime"))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	_ = decodeMCPBody(t, postMCPJSON(t, ts.URL+"/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      3,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{},
+			"clientInfo": map[string]any{
+				"name":    "postgres-hosted-get",
+				"version": "1.0",
+			},
+		},
+	}))
+
+	text := firstMCPText(t, decodeMCPBody(t, postMCPJSON(t, ts.URL+"/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      4,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "lore_get_skill",
+			"arguments": map[string]any{
+				"name": "pg-hosted-get",
+			},
+		},
+	})))
+	if !strings.Contains(text, "# postgres skill body") || !strings.Contains(text, `"compact_rules":"Return terse bullets."`) {
+		t.Fatalf("expected full skill payload from Postgres-backed get, got %q", text)
+	}
+	if !strings.Contains(text, `"stacks"`) || !strings.Contains(text, `"categories"`) {
+		t.Fatalf("expected catalog arrays in get output, got %q", text)
+	}
+}
+
 // ─── 4.6: skills:// resource handler tests ───────────────────────────────────
 
 func TestHandleSkillResourceFound(t *testing.T) {
@@ -2551,6 +2672,54 @@ func TestHandleSkillResourceNotFound(t *testing.T) {
 	_, err := h(context.Background(), req)
 	if err == nil {
 		t.Fatal("expected error for non-existent resource, got nil")
+	}
+}
+
+func TestHandleSkillResourcePostgresHostedPath(t *testing.T) {
+	pg := newPostgresMCPTestStore(t)
+	seedSkill(t, pg, "pg-hosted-resource", "Hosted Postgres Resource", "", "", "When reading a Postgres-hosted MCP resource", "# postgres hosted resource")
+
+	srv := serverpkg.NewWithConfig(pg, serverpkg.Config{Host: "127.0.0.1", Port: 0, Version: "pg-smoke"})
+	srv.SetMCPHandler(NewHTTPHandler(pg, "postgres-runtime"))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	_ = decodeMCPBody(t, postMCPJSON(t, ts.URL+"/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      5,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{},
+			"clientInfo": map[string]any{
+				"name":    "postgres-hosted-resource",
+				"version": "1.0",
+			},
+		},
+	}))
+
+	body := decodeMCPBody(t, postMCPJSON(t, ts.URL+"/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      6,
+		"method":  "resources/read",
+		"params": map[string]any{
+			"uri": "skills://pg-hosted-resource",
+		},
+	}))
+	result, ok := body["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("resource result missing: %v", body)
+	}
+	contents, ok := result["contents"].([]any)
+	if !ok || len(contents) != 1 {
+		t.Fatalf("unexpected resource contents payload: %v", result["contents"])
+	}
+	text, ok := contents[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected object content, got %T", contents[0])
+	}
+	if text["uri"] != "skills://pg-hosted-resource" || text["mimeType"] != "text/markdown" || !strings.Contains(text["text"].(string), "postgres hosted resource") {
+		t.Fatalf("unexpected resource contents: %+v", text)
 	}
 }
 
