@@ -74,7 +74,7 @@ This exposes:
 - MCP over HTTP at `/mcp`
 - browser-admin routes
 
-For hosted/staging environments, set `LORE_BASE_URL` to the public runtime URL.
+For hosted/staging environments, set `LORE_BASE_URL` to the public runtime URL and present `Authorization: Bearer <jwt>` for HTTP `/mcp` access.
 
 ---
 
@@ -86,6 +86,9 @@ Key variables for external configurators and operators:
 | --- | --- |
 | `LORE_BASE_URL` | Public base URL for the shared runtime |
 | `LORE_JWT_SECRET` | JWT signing secret for hosted/admin sessions |
+| `LORE_BOOTSTRAP_ADMIN_EMAIL` | Bootstrap admin email |
+| `LORE_BOOTSTRAP_ADMIN_PASSWORD` | Bootstrap admin password (required in staging; no default password exists) |
+| `LORE_BOOTSTRAP_ADMIN_NAME` | Optional bootstrap admin display name |
 | `DATABASE_URL` | Select PostgreSQL for shared runtime |
 | `LORE_DATA_DIR` | Local SQLite directory override |
 | `LORE_PORT` / `PORT` | Runtime port selection |
@@ -103,6 +106,14 @@ Lore resolves project context in this order:
 2. runtime detection from the current repository/directory
 
 External configurators may pass a project override when they need deterministic workspace routing, but project ownership remains a Lore runtime concern.
+
+Auth and approval notes for agent operators:
+
+- Lore uses one JWT identity format for browser sessions and HTTP `/mcp` bearer tokens.
+- `/mcp` re-resolves the actor from the store on every request, so stale role claims do not override current role/status.
+- Pending or disabled users receive `403` even if they still hold an older token.
+- Active `developer` and `tech_lead` users get memory read/write plus skill-read tools; `admin` gets the full/admin-delete tool surface; `na` has no effective MCP tools.
+- OAuth-created users are still subject to pending approval before they can use `/mcp`.
 
 ---
 

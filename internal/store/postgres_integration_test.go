@@ -570,24 +570,33 @@ func TestPostgresStoreUserLifecycleIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertUser(first): %v", err)
 	}
-	if first.Role != "admin" {
-		t.Fatalf("first role = %q, want admin", first.Role)
+	if first.Role != UserRoleAdmin {
+		t.Fatalf("first role = %q, want %q", first.Role, UserRoleAdmin)
+	}
+	if first.Status != UserStatusActive {
+		t.Fatalf("first status = %q, want %q", first.Status, UserStatusActive)
 	}
 
 	second, err := s.UpsertUser("second@example.com", "Second", "", "github")
 	if err != nil {
 		t.Fatalf("UpsertUser(second): %v", err)
 	}
-	if second.Role != "viewer" {
-		t.Fatalf("second role = %q, want viewer", second.Role)
+	if second.Role != UserRoleDeveloper {
+		t.Fatalf("second role = %q, want %q", second.Role, UserRoleDeveloper)
+	}
+	if second.Status != UserStatusActive {
+		t.Fatalf("second status = %q, want %q", second.Status, UserStatusActive)
 	}
 
-	promoted, err := s.UpdateUserRole(second.ID, "tech_lead")
+	promoted, err := s.UpdateUserStatusRole(second.ID, UserStatusDisabled, UserRoleTechLead)
 	if err != nil {
-		t.Fatalf("UpdateUserRole(second): %v", err)
+		t.Fatalf("UpdateUserStatusRole(second): %v", err)
 	}
-	if promoted.Role != "tech_lead" {
-		t.Fatalf("promoted role = %q, want tech_lead", promoted.Role)
+	if promoted.Role != UserRoleTechLead {
+		t.Fatalf("promoted role = %q, want %q", promoted.Role, UserRoleTechLead)
+	}
+	if promoted.Status != UserStatusDisabled {
+		t.Fatalf("promoted status = %q, want %q", promoted.Status, UserStatusDisabled)
 	}
 
 	relogin, err := s.UpsertUser("second@example.com", "Second Renamed", "https://example.com/second.png", "github")
@@ -597,8 +606,11 @@ func TestPostgresStoreUserLifecycleIntegration(t *testing.T) {
 	if relogin.ID != second.ID {
 		t.Fatalf("relogin id = %d, want %d", relogin.ID, second.ID)
 	}
-	if relogin.Role != "tech_lead" {
-		t.Fatalf("relogin role = %q, want tech_lead", relogin.Role)
+	if relogin.Role != UserRoleTechLead {
+		t.Fatalf("relogin role = %q, want %q", relogin.Role, UserRoleTechLead)
+	}
+	if relogin.Status != UserStatusDisabled {
+		t.Fatalf("relogin status = %q, want %q", relogin.Status, UserStatusDisabled)
 	}
 	if relogin.Name != "Second Renamed" {
 		t.Fatalf("relogin name = %q, want Second Renamed", relogin.Name)
@@ -618,8 +630,57 @@ func TestPostgresStoreUserLifecycleIntegration(t *testing.T) {
 		t.Fatalf("ListUsers order = %+v, want first then second", users)
 	}
 
-	if _, err := s.UpdateUserRole(99999, "admin"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("UpdateUserRole(missing) error = %v, want ErrNotFound", err)
+	if _, err := s.UpdateUserStatusRole(99999, UserStatusActive, UserRoleAdmin); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("UpdateUserStatusRole(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestPostgresStoreBootstrapMigratesViewerRoleAndCreatesAdminIdempotently(t *testing.T) {
+	s := newPostgresTestStore(t)
+
+	if _, err := s.db.Exec(`INSERT INTO users (email, name, role, provider) VALUES ($1, $2, $3, $4)`, "legacy@example.com", "Legacy", "viewer", "github"); err != nil {
+		t.Fatalf("insert legacy viewer user: %v", err)
+	}
+	if err := postgresbackend.Bootstrap(s.db); err != nil {
+		t.Fatalf("Bootstrap() rerun error = %v", err)
+	}
+
+	legacy, err := s.GetUserAuthByEmail("legacy@example.com")
+	if err != nil {
+		t.Fatalf("GetUserAuthByEmail(legacy): %v", err)
+	}
+	if legacy.Role != UserRoleDeveloper {
+		t.Fatalf("legacy role = %q, want %q", legacy.Role, UserRoleDeveloper)
+	}
+	if legacy.Status != UserStatusActive {
+		t.Fatalf("legacy status = %q, want %q", legacy.Status, UserStatusActive)
+	}
+
+	bootstrapped, err := s.BootstrapAdmin("admin@example.com", "Bootstrap Admin", "hash-admin")
+	if err != nil {
+		t.Fatalf("BootstrapAdmin(first): %v", err)
+	}
+	if bootstrapped.Role != UserRoleAdmin || bootstrapped.Status != UserStatusActive {
+		t.Fatalf("bootstrapped user = %+v, want active admin", bootstrapped)
+	}
+
+	second, err := s.BootstrapAdmin("admin@example.com", "Changed Name", "hash-replaced")
+	if err != nil {
+		t.Fatalf("BootstrapAdmin(second): %v", err)
+	}
+	if second.ID != bootstrapped.ID {
+		t.Fatalf("second bootstrap id = %d, want %d", second.ID, bootstrapped.ID)
+	}
+	if second.Name != "Bootstrap Admin" {
+		t.Fatalf("second bootstrap name = %q, want original", second.Name)
+	}
+
+	authUser, err := s.GetUserAuthByEmail("admin@example.com")
+	if err != nil {
+		t.Fatalf("GetUserAuthByEmail(admin): %v", err)
+	}
+	if authUser.PasswordHash != "hash-admin" {
+		t.Fatalf("PasswordHash = %q, want hash-admin", authUser.PasswordHash)
 	}
 }
 
@@ -662,7 +723,7 @@ func TestPostgresStoreUpsertUserAssignsSingleAdminConcurrently(t *testing.T) {
 
 	adminCount := 0
 	for _, user := range users {
-		if user.Role == "admin" {
+		if user.Role == UserRoleAdmin {
 			adminCount++
 		}
 	}

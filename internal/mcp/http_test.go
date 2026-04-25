@@ -10,9 +10,49 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	serverpkg "github.com/alferio94/lore/internal/server"
+	"github.com/alferio94/lore/internal/store"
+	jwtlib "github.com/golang-jwt/jwt/v5"
 )
+
+func issueMCPBearerToken(t *testing.T, secret []byte, user store.User) string {
+	t.Helper()
+	claims := jwtlib.MapClaims{
+		"sub":   strconv.FormatInt(user.ID, 10),
+		"email": user.Email,
+		"name":  user.Name,
+		"role":  user.Role,
+		"iat":   time.Now().Unix(),
+		"exp":   time.Now().Add(24 * time.Hour).Unix(),
+	}
+	tok := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, claims)
+	signed, err := tok.SignedString(secret)
+	if err != nil {
+		t.Fatalf("sign bearer token: %v", err)
+	}
+	return signed
+}
+
+func authorizedMCPPost(t *testing.T, url string, secret []byte, user store.User, body map[string]any) *http.Response {
+	t.Helper()
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal MCP request: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("new MCP request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueMCPBearerToken(t, secret, user))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	return resp
+}
 
 // TestNewHTTPHandlerReturnsNonNil verifies that NewHTTPHandler returns a non-nil
 // http.Handler. This is the RED test for task 1.1.
@@ -28,6 +68,240 @@ func TestNewHTTPHandlerReturnsNonNil(t *testing.T) {
 func TestNewHTTPHandlerIsHTTPHandler(t *testing.T) {
 	s := newMCPTestStore(t)
 	var _ http.Handler = NewHTTPHandler(s, "test-project")
+}
+
+func TestNewHTTPHandlerWithConfigRequiresBearerToken(t *testing.T) {
+	s := newMCPTestStore(t)
+	handler := NewHTTPHandlerWithConfig(s, HTTPHandlerConfig{
+		DefaultProject: "test-project",
+		JWTSecret:      []byte("mcp-http-secret-32-bytes-long!!!"),
+	})
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	resp := postMCPJSONAllowStatus(t, ts.URL, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{},
+			"clientInfo": map[string]any{
+				"name":    "auth-test-client",
+				"version": "1.0",
+			},
+		},
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected HTTP 401 for missing bearer token, got %d", resp.StatusCode)
+	}
+}
+
+func TestNewHTTPHandlerWithConfigRejectsInvalidBearerToken(t *testing.T) {
+	s := newMCPTestStore(t)
+	handler := NewHTTPHandlerWithConfig(s, HTTPHandlerConfig{
+		DefaultProject: "test-project",
+		JWTSecret:      []byte("mcp-http-secret-32-bytes-long!!!"),
+	})
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	payload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/list",
+		"params":  map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, ts.URL, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer definitely-not-a-jwt")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST tools/list: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected HTTP 401 for invalid bearer token, got %d", resp.StatusCode)
+	}
+}
+
+func TestNewHTTPHandlerWithConfigRejectsDisabledActorFromStore(t *testing.T) {
+	s := newMCPTestStore(t)
+	secret := []byte("mcp-http-secret-32-bytes-long!!!")
+	handler := NewHTTPHandlerWithConfig(s, HTTPHandlerConfig{DefaultProject: "test-project", JWTSecret: secret})
+
+	user, err := s.CreatePendingUser("disabled@example.com", "Disabled User", "hash-disabled")
+	if err != nil {
+		t.Fatalf("CreatePendingUser: %v", err)
+	}
+	user, err = s.UpdateUserStatusRole(user.ID, store.UserStatusActive, store.UserRoleDeveloper)
+	if err != nil {
+		t.Fatalf("UpdateUserStatusRole(active): %v", err)
+	}
+	user, err = s.UpdateUserStatusRole(user.ID, store.UserStatusDisabled, store.UserRoleDeveloper)
+	if err != nil {
+		t.Fatalf("UpdateUserStatusRole(disabled): %v", err)
+	}
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	resp := authorizedMCPPost(t, ts.URL, secret, *user, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      3,
+		"method":  "tools/list",
+		"params":  map[string]any{},
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected HTTP 403 for disabled actor, got %d", resp.StatusCode)
+	}
+}
+
+func TestNewHTTPHandlerWithConfigRejectsStaleTokenActor(t *testing.T) {
+	s := newMCPTestStore(t)
+	secret := []byte("mcp-http-secret-32-bytes-long!!!")
+	handler := NewHTTPHandlerWithConfig(s, HTTPHandlerConfig{DefaultProject: "test-project", JWTSecret: secret})
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	resp := authorizedMCPPost(t, ts.URL, secret, store.User{
+		ID:     99999,
+		Email:  "ghost@example.com",
+		Name:   "Ghost",
+		Role:   store.UserRoleDeveloper,
+		Status: store.UserStatusActive,
+	}, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      4,
+		"method":  "tools/list",
+		"params":  map[string]any{},
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected HTTP 403 for stale-token actor, got %d", resp.StatusCode)
+	}
+}
+
+func TestNewHTTPHandlerWithConfigDeveloperGetsAgentToolsOnly(t *testing.T) {
+	s := newMCPTestStore(t)
+	secret := []byte("mcp-http-secret-32-bytes-long!!!")
+	handler := NewHTTPHandlerWithConfig(s, HTTPHandlerConfig{DefaultProject: "test-project", JWTSecret: secret})
+
+	user, err := s.CreatePendingUser("developer@example.com", "Developer", "hash-developer")
+	if err != nil {
+		t.Fatalf("CreatePendingUser: %v", err)
+	}
+	user, err = s.UpdateUserStatusRole(user.ID, store.UserStatusActive, store.UserRoleDeveloper)
+	if err != nil {
+		t.Fatalf("UpdateUserStatusRole: %v", err)
+	}
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	resp := authorizedMCPPost(t, ts.URL, secret, *user, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      5,
+		"method":  "tools/list",
+		"params":  map[string]any{},
+	})
+	body := decodeMCPBodyAllowStatus(t, resp, http.StatusOK)
+
+	toolNames := mcpToolNamesFromBody(t, body)
+	for _, tool := range []string{"lore_save", "lore_search", "lore_update", "lore_list_skills", "lore_get_skill"} {
+		if !toolNames[tool] {
+			t.Fatalf("expected developer tools/list to include %q, got %v", tool, toolNames)
+		}
+	}
+	for _, tool := range []string{"lore_delete", "lore_merge_projects", "lore_stats", "lore_timeline"} {
+		if toolNames[tool] {
+			t.Fatalf("expected developer tools/list to exclude %q, got %v", tool, toolNames)
+		}
+	}
+}
+
+func TestNewHTTPHandlerWithConfigAdminGetsAdminTools(t *testing.T) {
+	s := newMCPTestStore(t)
+	secret := []byte("mcp-http-secret-32-bytes-long!!!")
+	handler := NewHTTPHandlerWithConfig(s, HTTPHandlerConfig{DefaultProject: "test-project", JWTSecret: secret})
+
+	user, err := s.BootstrapAdmin("admin@example.com", "Admin", "hash-admin")
+	if err != nil {
+		t.Fatalf("BootstrapAdmin: %v", err)
+	}
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	resp := authorizedMCPPost(t, ts.URL, secret, *user, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      6,
+		"method":  "tools/list",
+		"params":  map[string]any{},
+	})
+	body := decodeMCPBodyAllowStatus(t, resp, http.StatusOK)
+
+	toolNames := mcpToolNamesFromBody(t, body)
+	for _, tool := range []string{"lore_save", "lore_delete", "lore_merge_projects", "lore_stats", "lore_timeline"} {
+		if !toolNames[tool] {
+			t.Fatalf("expected admin tools/list to include %q, got %v", tool, toolNames)
+		}
+	}
+}
+
+func TestNewHTTPHandlerWithConfigUsesStoreRoleInsteadOfTokenClaims(t *testing.T) {
+	s := newMCPTestStore(t)
+	secret := []byte("mcp-http-secret-32-bytes-long!!!")
+	handler := NewHTTPHandlerWithConfig(s, HTTPHandlerConfig{DefaultProject: "test-project", JWTSecret: secret})
+
+	user, err := s.CreatePendingUser("role-override@example.com", "Role Override", "hash-role-override")
+	if err != nil {
+		t.Fatalf("CreatePendingUser: %v", err)
+	}
+	user, err = s.UpdateUserStatusRole(user.ID, store.UserStatusActive, store.UserRoleDeveloper)
+	if err != nil {
+		t.Fatalf("UpdateUserStatusRole: %v", err)
+	}
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	resp := authorizedMCPPost(t, ts.URL, secret, store.User{
+		ID:     user.ID,
+		Email:  user.Email,
+		Name:   user.Name,
+		Role:   store.UserRoleAdmin,
+		Status: user.Status,
+	}, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      7,
+		"method":  "tools/list",
+		"params":  map[string]any{},
+	})
+	body := decodeMCPBodyAllowStatus(t, resp, http.StatusOK)
+
+	toolNames := mcpToolNamesFromBody(t, body)
+	if toolNames["lore_delete"] || toolNames["lore_merge_projects"] {
+		t.Fatalf("expected store role to override admin claims, got admin tools %v", toolNames)
+	}
+	if !toolNames["lore_save"] || !toolNames["lore_get_skill"] {
+		t.Fatalf("expected developer-level tools from current store role, got %v", toolNames)
+	}
 }
 
 // TestMCPHTTPInitializeRoundTrip verifies that a valid MCP initialize request
@@ -510,16 +784,38 @@ func TestMCPHTTPPostgresRoundTripAtServerMCPPath(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedMCPHTTPMountRejectsMissingBearerAtServerPath(t *testing.T) {
+	s := newMCPTestStore(t)
+	secret := []byte("mcp-http-secret-32-bytes-long!!!")
+	srv := serverpkg.NewWithConfig(s, serverpkg.Config{Host: "127.0.0.1", Port: 0, Version: "auth-preview"})
+	srv.SetMCPHandler(NewHTTPHandlerWithConfig(s, HTTPHandlerConfig{DefaultProject: "preview-runtime", JWTSecret: secret}))
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp := postMCPJSONAllowStatus(t, ts.URL+"/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      104,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{},
+			"clientInfo": map[string]any{
+				"name":    "missing-bearer",
+				"version": "1.0",
+			},
+		},
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected HTTP 401 for mounted /mcp without bearer token, got %d", resp.StatusCode)
+	}
+}
+
 func postMCPJSON(t *testing.T, url string, body map[string]any) *http.Response {
 	t.Helper()
-	payload, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal MCP request: %v", err)
-	}
-	resp, err := http.Post(url, "application/json", bytes.NewReader(payload))
-	if err != nil {
-		t.Fatalf("POST %s: %v", url, err)
-	}
+	resp := postMCPJSONAllowStatus(t, url, body)
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		var raw bytes.Buffer
@@ -529,8 +825,32 @@ func postMCPJSON(t *testing.T, url string, body map[string]any) *http.Response {
 	return resp
 }
 
+func postMCPJSONAllowStatus(t *testing.T, url string, body map[string]any) *http.Response {
+	t.Helper()
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal MCP request: %v", err)
+	}
+	resp, err := http.Post(url, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	return resp
+}
+
 func decodeMCPBody(t *testing.T, resp *http.Response) map[string]any {
 	t.Helper()
+	return decodeMCPBodyAllowStatus(t, resp, http.StatusOK)
+}
+
+func decodeMCPBodyAllowStatus(t *testing.T, resp *http.Response, status int) map[string]any {
+	t.Helper()
+	if resp.StatusCode != status {
+		defer resp.Body.Close()
+		var raw bytes.Buffer
+		_, _ = raw.ReadFrom(resp.Body)
+		t.Fatalf("expected HTTP %d, got %d body=%q", status, resp.StatusCode, raw.String())
+	}
 	defer resp.Body.Close()
 	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -540,6 +860,28 @@ func decodeMCPBody(t *testing.T, resp *http.Response) map[string]any {
 		t.Fatalf("unexpected MCP error: %v", errBody)
 	}
 	return body
+}
+
+func mcpToolNamesFromBody(t *testing.T, body map[string]any) map[string]bool {
+	t.Helper()
+	resultBody, ok := body["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("result missing from MCP body: %v", body)
+	}
+	tools, ok := resultBody["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools missing from MCP body: %v", resultBody)
+	}
+	toolNames := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		toolMap, ok := tool.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := toolMap["name"].(string)
+		toolNames[name] = true
+	}
+	return toolNames
 }
 
 func firstMCPText(t *testing.T, body map[string]any) string {

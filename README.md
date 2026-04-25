@@ -92,6 +92,9 @@ Important runtime env vars:
 - `DATABASE_URL`
 - `LORE_BASE_URL`
 - `LORE_JWT_SECRET`
+- `LORE_BOOTSTRAP_ADMIN_EMAIL`
+- `LORE_BOOTSTRAP_ADMIN_PASSWORD`
+- `LORE_BOOTSTRAP_ADMIN_NAME`
 - `LORE_PORT` / `PORT`
 - `LORE_PROJECT`
 
@@ -101,9 +104,17 @@ See [DOCS.md](DOCS.md) and [docs/INSTALLATION.md](docs/INSTALLATION.md) for deta
 
 The first Railway preview keeps Lore on the existing hosted contract: deploy `lore serve`, back it with Railway PostgreSQL through `DATABASE_URL`, and configure `PORT`, `DATABASE_URL`, `LORE_ENV`, `LORE_BASE_URL`, and `LORE_JWT_SECRET` before exposing the service publicly.
 
-Use `LORE_ENV=staging` for Railway. Railway injects `PORT`; leave `LORE_PORT` unset unless you intentionally need to override the platform port. `DATABASE_URL` must be PostgreSQL, and `LORE_JWT_SECRET` must be persistent and at least 32 bytes. `LORE_BASE_URL` must be the public Railway URL so admin links and callbacks resolve correctly.
+Use `LORE_ENV=staging` for Railway. Railway injects `PORT`; leave `LORE_PORT` unset unless you intentionally need to override the platform port. `DATABASE_URL` must be PostgreSQL, and `LORE_JWT_SECRET` must be persistent and at least 32 bytes. `LORE_BASE_URL` must be the public Railway URL so admin links and callbacks resolve correctly. `LORE_BOOTSTRAP_ADMIN_EMAIL` and `LORE_BOOTSTRAP_ADMIN_PASSWORD` are also required in staging; Lore may default the bootstrap email locally to `admin@admin.com`, but it never invents a default password.
 
-After deploy, run a `/health` and `/mcp` smoke check: `curl "$LORE_BASE_URL/health"` should return `200` only when the PostgreSQL-backed store is reachable, and an MCP client should initialize successfully against `"$LORE_BASE_URL/mcp"`. For PostgreSQL-backed hosted/runtime validation, the minimum MCP smoke now includes `lore_list_skills`, `lore_get_skill`, or `skills://{name}` against seeded skill data rather than expecting the skill catalog to be unsupported.
+After deploy, run a `/health` and `/mcp` smoke check: `curl "$LORE_BASE_URL/health"` should return `200` only when the PostgreSQL-backed store is reachable, and an MCP client should initialize successfully against `"$LORE_BASE_URL/mcp"` with `Authorization: Bearer <jwt>`. `/mcp` always re-resolves the actor from the store, so pending, disabled, or deleted users are denied even if they still hold an older token. For PostgreSQL-backed hosted/runtime validation, the minimum MCP smoke now includes `lore_list_skills` / `lore_get_skill` for active `developer` users and the admin-only tools for `admin` users.
+
+Auth lifecycle summary for this MVP:
+
+- Self-registration creates `role=na`, `status=pending`.
+- Canonical roles are `admin`, `tech_lead`, `developer`, and `na`.
+- Canonical statuses are `pending`, `active`, and `disabled`.
+- OAuth follows the same approval gate: OAuth-created users stay pending until an admin activates them.
+- JWTs are bearer/session transport tokens, not revocable capability tokens. Revocation is enforced by current store state on each protected request, but this MVP does not yet provide refresh tokens, logout-all-sessions, or per-token revocation lists.
 
 No web view/dashboard/browser UI expansion, TUI changes, agent configurators/plugins, or production auth/multi-user hardening are included in this preview.
 

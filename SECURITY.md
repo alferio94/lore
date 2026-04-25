@@ -46,6 +46,14 @@ When operators run `lore serve` as a shared service, important areas include:
 - `/mcp` exposure and tool authorization
 - PostgreSQL-backed multi-user or shared-runtime risks
 
+Current auth model notes:
+
+- Bootstrap admin setup depends on `LORE_BOOTSTRAP_ADMIN_EMAIL`, `LORE_BOOTSTRAP_ADMIN_PASSWORD`, and optional `LORE_BOOTSTRAP_ADMIN_NAME`. Lore may default the bootstrap email locally, but it never invents a password.
+- Canonical roles are `admin`, `tech_lead`, `developer`, and `na`; canonical statuses are `pending`, `active`, and `disabled`.
+- Self-registration and OAuth-created users enter as pending until approved by an admin.
+- HTTP `/mcp` requires a bearer JWT and then re-resolves the actor from current store state, so pending/disabled/deleted users are denied even with an older token.
+- MVP limitation: Lore does not yet provide refresh tokens, per-token revocation lists, or global session invalidation. Revocation today depends on checking current actor state at request time.
+
 ### Local mode
 
 When a user runs Lore locally with SQLite, important areas include:

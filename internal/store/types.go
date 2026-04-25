@@ -190,11 +190,30 @@ type User struct {
 	Email     string `json:"email"`
 	Name      string `json:"name"`
 	Role      string `json:"role"`
+	Status    string `json:"status"`
 	AvatarURL string `json:"avatar_url"`
 	Provider  string `json:"provider"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
+
+type UserAuth struct {
+	User
+	PasswordHash string `json:"-"`
+}
+
+const (
+	UserRoleAdmin     = "admin"
+	UserRoleTechLead  = "tech_lead"
+	UserRoleDeveloper = "developer"
+	UserRoleNA        = "na"
+
+	LegacyUserRoleViewer = "viewer"
+
+	UserStatusPending  = "pending"
+	UserStatusActive   = "active"
+	UserStatusDisabled = "disabled"
+)
 
 type ListSkillsParams struct {
 	StackID    *int64 `json:"stack_id,omitempty"`

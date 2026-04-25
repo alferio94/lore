@@ -56,8 +56,14 @@ type Contract interface {
 	DeleteCategory(id int64) error
 	AdminStats() (AdminStats, error)
 	UpsertUser(email, name, avatarURL, provider string) (*User, error)
+	CreatePendingUser(email, name, passwordHash string) (*User, error)
+	GetUserByEmail(email string) (*User, error)
+	GetUserAuthByEmail(email string) (*UserAuth, error)
+	GetUserByID(id int64) (*User, error)
 	ListUsers() ([]User, error)
 	UpdateUserRole(id int64, role string) (*User, error)
+	UpdateUserStatusRole(id int64, status, role string) (*User, error)
+	BootstrapAdmin(email, name, passwordHash string) (*User, error)
 }
 
 func Open(cfg Config) (Contract, error) {

@@ -84,7 +84,7 @@ This mode remains important for:
 | --- | --- |
 | `cmd/lore` | Runtime composition, command surfaces, env/config handling |
 | `internal/server` | HTTP API and request handling |
-| `internal/mcp` | MCP tool server and tool profile resolution |
+| `internal/mcp` | MCP tool server, HTTP bearer auth wrapper, and role-based tool resolution |
 | `internal/admin` | Browser-admin/auth surface |
 | `internal/store` | Storage contracts and backend selection |
 | `internal/project` | Project/workspace detection hints |
@@ -127,3 +127,5 @@ The only in-repo integration package preserved here is `plugin/obsidian/`, becau
 - Do not add new Lore-owned vendor setup automation.
 - Prefer stable primitives (`lore serve`, `/mcp`, `lore mcp`, runtime env vars, auth/JWT, project hints) over vendor-specific packaging.
 - Keep project/workspace detection hints documented as Lore-owned runtime metadata, not as external configurator logic.
+- Keep identity decisions store-resolved at request time: JWTs are transport, current user role/status in `internal/store` is the authority.
+- Keep MCP role gates aligned to the tools that actually exist today; do not invent governance surfaces that the runtime does not expose yet.

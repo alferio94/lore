@@ -152,7 +152,7 @@ func TestHandleStats_401Unauthenticated(t *testing.T) {
 	h := &adminHandler{cfg: cfg}
 
 	// Wire via requireRole as done in Mount()
-	handler := requireRole(cfg.JWTSecret, "viewer", http.HandlerFunc(h.handleStats))
+	handler := requireRole(cfg.JWTSecret, store.UserRoleDeveloper, http.HandlerFunc(h.handleStats))
 
 	req := newTestRequest(t, "GET", "/admin/api/stats", nil)
 	// No cookie
@@ -171,10 +171,10 @@ func TestHandleStats_403NoRole(t *testing.T) {
 	cfg := makeStatsCfg(s)
 	h := &adminHandler{cfg: cfg}
 
-	handler := requireRole(cfg.JWTSecret, "viewer", http.HandlerFunc(h.handleStats))
+	handler := requireRole(cfg.JWTSecret, store.UserRoleDeveloper, http.HandlerFunc(h.handleStats))
 
 	req := newTestRequest(t, "GET", "/admin/api/stats", nil)
-	// Empty role — not viewer/tech_lead/admin
+	// Empty role — not developer/tech_lead/admin
 	req.AddCookie(makeStatsCookie(t, cfg, ""))
 	w := newTestResponseRecorder()
 	handler(w, req)

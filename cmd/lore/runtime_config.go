@@ -24,6 +24,10 @@ type RuntimeConfig struct {
 	JWTSecret    string
 	CookieSecure bool
 
+	BootstrapAdminEmail    string
+	BootstrapAdminPassword string
+	BootstrapAdminName     string
+
 	GoogleClientID     string
 	GoogleClientSecret string
 	GitHubClientID     string
@@ -81,17 +85,33 @@ func loadRuntimeConfig(args []string) (RuntimeConfig, error) {
 		}
 	}
 
+	bootstrapAdminEmail := strings.TrimSpace(os.Getenv("LORE_BOOTSTRAP_ADMIN_EMAIL"))
+	if bootstrapAdminEmail == "" && env == RuntimeEnvLocal {
+		bootstrapAdminEmail = "admin@admin.com"
+	}
+	bootstrapAdminPassword := strings.TrimSpace(os.Getenv("LORE_BOOTSTRAP_ADMIN_PASSWORD"))
+	if env == RuntimeEnvStaging && bootstrapAdminPassword == "" {
+		return RuntimeConfig{}, fmt.Errorf("lore config: LORE_BOOTSTRAP_ADMIN_PASSWORD is required when LORE_ENV=staging")
+	}
+	if env == RuntimeEnvStaging && bootstrapAdminEmail == "" {
+		return RuntimeConfig{}, fmt.Errorf("lore config: LORE_BOOTSTRAP_ADMIN_EMAIL is required when LORE_ENV=staging")
+	}
+	bootstrapAdminName := strings.TrimSpace(os.Getenv("LORE_BOOTSTRAP_ADMIN_NAME"))
+
 	return RuntimeConfig{
-		Env:                env,
-		Host:               host,
-		Port:               port,
-		BaseURL:            baseURL,
-		JWTSecret:          jwtSecret,
-		CookieSecure:       cookieSecure,
-		GoogleClientID:     os.Getenv("LORE_GOOGLE_CLIENT_ID"),
-		GoogleClientSecret: os.Getenv("LORE_GOOGLE_CLIENT_SECRET"),
-		GitHubClientID:     os.Getenv("LORE_GITHUB_CLIENT_ID"),
-		GitHubClientSecret: os.Getenv("LORE_GITHUB_CLIENT_SECRET"),
+		Env:                    env,
+		Host:                   host,
+		Port:                   port,
+		BaseURL:                baseURL,
+		JWTSecret:              jwtSecret,
+		CookieSecure:           cookieSecure,
+		BootstrapAdminEmail:    bootstrapAdminEmail,
+		BootstrapAdminPassword: bootstrapAdminPassword,
+		BootstrapAdminName:     bootstrapAdminName,
+		GoogleClientID:         os.Getenv("LORE_GOOGLE_CLIENT_ID"),
+		GoogleClientSecret:     os.Getenv("LORE_GOOGLE_CLIENT_SECRET"),
+		GitHubClientID:         os.Getenv("LORE_GITHUB_CLIENT_ID"),
+		GitHubClientSecret:     os.Getenv("LORE_GITHUB_CLIENT_SECRET"),
 	}, nil
 }
 

@@ -33,8 +33,13 @@ type AdminStore interface {
 	AdminStats() (store.AdminStats, error)
 	ListProjectsWithStats() ([]store.ProjectStats, error)
 	UpsertUser(email, name, avatarURL, provider string) (*store.User, error)
+	CreatePendingUser(email, name, passwordHash string) (*store.User, error)
+	GetUserByEmail(email string) (*store.User, error)
+	GetUserAuthByEmail(email string) (*store.UserAuth, error)
+	GetUserByID(id int64) (*store.User, error)
 	ListUsers() ([]store.User, error)
 	UpdateUserRole(id int64, role string) (*store.User, error)
+	UpdateUserStatusRole(id int64, status, role string) (*store.User, error)
 }
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -61,7 +66,7 @@ type Claims struct {
 	jwtlib.RegisteredClaims
 	Email string `json:"email"`
 	Name  string `json:"name"`
-	Role  string `json:"role"` // "admin" | "tech_lead" | "viewer"
+	Role  string `json:"role"`
 }
 
 // ─── Context helpers ─────────────────────────────────────────────────────────
@@ -69,6 +74,8 @@ type Claims struct {
 type ctxKey string
 
 const claimsCtxKey ctxKey = "claims"
+const actorCtxKey ctxKey = "actor"
+const adminStoreCtxKey ctxKey = "admin-store"
 
 // claimsFromCtx retrieves Claims injected by requireAuth middleware.
 func claimsFromCtx(ctx context.Context) (*Claims, bool) {
@@ -81,6 +88,26 @@ func withClaims(ctx context.Context, c *Claims) context.Context {
 	return context.WithValue(ctx, claimsCtxKey, c)
 }
 
+func actorFromCtx(ctx context.Context) (*store.User, bool) {
+	actor, ok := ctx.Value(actorCtxKey).(*store.User)
+	return actor, ok
+}
+
+func withActor(ctx context.Context, actor *store.User) context.Context {
+	return context.WithValue(ctx, actorCtxKey, actor)
+}
+
+func withAdminStore(store AdminStore, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		next(w, r.WithContext(context.WithValue(r.Context(), adminStoreCtxKey, store)))
+	}
+}
+
+func adminStoreFromCtx(ctx context.Context) (AdminStore, bool) {
+	store, ok := ctx.Value(adminStoreCtxKey).(AdminStore)
+	return store, ok
+}
+
 // ─── Mount ───────────────────────────────────────────────────────────────────
 
 // Mount registers all admin routes on the given mux.
@@ -88,8 +115,17 @@ func withClaims(ctx context.Context, c *Claims) context.Context {
 // Call this from cmdServe() after constructing AdminConfig.
 func Mount(mux *http.ServeMux, cfg AdminConfig) {
 	h := &adminHandler{cfg: cfg}
+	protectAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return withAdminStore(cfg.Store, requireAuth(cfg.JWTSecret, next))
+	}
+	protectRole := func(minRole string, next http.HandlerFunc) http.HandlerFunc {
+		return withAdminStore(cfg.Store, requireRole(cfg.JWTSecret, minRole, next))
+	}
 
 	// Auth routes (no JWT required)
+	mux.HandleFunc("POST /admin/auth/register", h.handleRegister)
+	mux.HandleFunc("POST /admin/auth/login", h.handleLogin)
+	mux.HandleFunc("POST /admin/auth/logout", h.handleLogout)
 	mux.HandleFunc("GET /admin/auth/{provider}", h.handleAuthStart)
 	mux.HandleFunc("GET /admin/auth/callback/{provider}", h.handleAuthCallback)
 
@@ -99,33 +135,34 @@ func Mount(mux *http.ServeMux, cfg AdminConfig) {
 	}
 
 	// Skills API routes
-	mux.HandleFunc("GET /admin/api/skills", requireRole(cfg.JWTSecret, "viewer", h.handleListSkills))
-	mux.HandleFunc("GET /admin/api/skills/{name}", requireRole(cfg.JWTSecret, "viewer", h.handleGetSkill))
-	mux.HandleFunc("POST /admin/api/skills", requireRole(cfg.JWTSecret, "tech_lead", h.handleCreateSkill))
-	mux.HandleFunc("PUT /admin/api/skills/{name}", requireRole(cfg.JWTSecret, "tech_lead", h.handleUpdateSkill))
-	mux.HandleFunc("DELETE /admin/api/skills/{name}", requireRole(cfg.JWTSecret, "admin", h.handleDeleteSkill))
+	mux.HandleFunc("GET /admin/api/skills", protectRole(store.UserRoleDeveloper, h.handleListSkills))
+	mux.HandleFunc("GET /admin/api/skills/{name}", protectRole(store.UserRoleDeveloper, h.handleGetSkill))
+	mux.HandleFunc("POST /admin/api/skills", protectRole(store.UserRoleTechLead, h.handleCreateSkill))
+	mux.HandleFunc("PUT /admin/api/skills/{name}", protectRole(store.UserRoleTechLead, h.handleUpdateSkill))
+	mux.HandleFunc("DELETE /admin/api/skills/{name}", protectRole(store.UserRoleAdmin, h.handleDeleteSkill))
 
 	// Stacks catalog API routes
-	mux.HandleFunc("GET /admin/api/stacks", requireRole(cfg.JWTSecret, "viewer", h.handleListStacks))
-	mux.HandleFunc("POST /admin/api/stacks", requireRole(cfg.JWTSecret, "tech_lead", h.handleCreateStack))
-	mux.HandleFunc("DELETE /admin/api/stacks/{id}", requireRole(cfg.JWTSecret, "admin", h.handleDeleteStack))
+	mux.HandleFunc("GET /admin/api/stacks", protectRole(store.UserRoleDeveloper, h.handleListStacks))
+	mux.HandleFunc("POST /admin/api/stacks", protectRole(store.UserRoleTechLead, h.handleCreateStack))
+	mux.HandleFunc("DELETE /admin/api/stacks/{id}", protectRole(store.UserRoleAdmin, h.handleDeleteStack))
 
 	// Categories catalog API routes
-	mux.HandleFunc("GET /admin/api/categories", requireRole(cfg.JWTSecret, "viewer", h.handleListCategories))
-	mux.HandleFunc("POST /admin/api/categories", requireRole(cfg.JWTSecret, "tech_lead", h.handleCreateCategory))
-	mux.HandleFunc("DELETE /admin/api/categories/{id}", requireRole(cfg.JWTSecret, "admin", h.handleDeleteCategory))
+	mux.HandleFunc("GET /admin/api/categories", protectRole(store.UserRoleDeveloper, h.handleListCategories))
+	mux.HandleFunc("POST /admin/api/categories", protectRole(store.UserRoleTechLead, h.handleCreateCategory))
+	mux.HandleFunc("DELETE /admin/api/categories/{id}", protectRole(store.UserRoleAdmin, h.handleDeleteCategory))
 
 	// ── Stats API ──
-	mux.HandleFunc("GET /admin/api/stats", requireRole(cfg.JWTSecret, "viewer", h.handleStats))
+	mux.HandleFunc("GET /admin/api/stats", protectRole(store.UserRoleDeveloper, h.handleStats))
 
 	// ── Projects API (read-only) ──
-	mux.HandleFunc("GET /admin/api/projects", requireRole(cfg.JWTSecret, "viewer", h.handleListProjects))
-	mux.HandleFunc("GET /admin/api/projects/{name}", requireRole(cfg.JWTSecret, "viewer", h.handleGetProject))
+	mux.HandleFunc("GET /admin/api/projects", protectRole(store.UserRoleDeveloper, h.handleListProjects))
+	mux.HandleFunc("GET /admin/api/projects/{name}", protectRole(store.UserRoleDeveloper, h.handleGetProject))
 
 	// ── Users API ──
-	mux.HandleFunc("GET /admin/api/users", requireRole(cfg.JWTSecret, "admin", h.handleListUsers))
-	mux.HandleFunc("PUT /admin/api/users/{id}/role", requireRole(cfg.JWTSecret, "admin", h.handleUpdateUserRole))
-	mux.HandleFunc("GET /admin/api/me", requireAuth(cfg.JWTSecret, h.handleGetMe))
+	mux.HandleFunc("GET /admin/api/users", protectRole(store.UserRoleAdmin, h.handleListUsers))
+	mux.HandleFunc("PATCH /admin/api/users/{id}", protectRole(store.UserRoleAdmin, h.handleUpdateUserRole))
+	mux.HandleFunc("PUT /admin/api/users/{id}/role", protectRole(store.UserRoleAdmin, h.handleUpdateUserRole))
+	mux.HandleFunc("GET /admin/api/me", protectAuth(h.handleGetMe))
 
 	// SPA catch-all — MUST be last so API and auth routes take precedence.
 	// Serves embedded admin_dist/* files; falls back to index.html for

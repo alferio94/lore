@@ -62,6 +62,34 @@ func newTestStore(t *testing.T) *Store {
 	return s
 }
 
+func TestNewMigratesLegacyViewerUsersToDeveloperAndActive(t *testing.T) {
+	s := newTestStore(t)
+	created, err := s.UpsertUser("viewer@example.com", "Viewer User", "", "github")
+	if err != nil {
+		t.Fatalf("UpsertUser(): %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE users SET role = ? WHERE id = ?`, LegacyUserRoleViewer, created.ID); err != nil {
+		t.Fatalf("force legacy viewer role: %v", err)
+	}
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate() rerun: %v", err)
+	}
+
+	migrated, err := s.GetUserAuthByEmail("viewer@example.com")
+	if err != nil {
+		t.Fatalf("GetUserAuthByEmail(): %v", err)
+	}
+	if migrated.Role != UserRoleDeveloper {
+		t.Fatalf("Role = %q, want %q", migrated.Role, UserRoleDeveloper)
+	}
+	if migrated.Status != UserStatusActive {
+		t.Fatalf("Status = %q, want %q", migrated.Status, UserStatusActive)
+	}
+	if migrated.PasswordHash != "" {
+		t.Fatalf("PasswordHash = %q, want empty hash for legacy oauth user", migrated.PasswordHash)
+	}
+}
+
 type fakeRows struct {
 	next    []bool
 	scanErr error

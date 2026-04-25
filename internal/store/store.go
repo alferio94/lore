@@ -357,7 +357,9 @@ func (s *Store) migrate() error {
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
 			email      TEXT    NOT NULL UNIQUE,
 			name       TEXT    NOT NULL DEFAULT '',
-			role       TEXT    NOT NULL DEFAULT 'viewer',
+			role       TEXT    NOT NULL DEFAULT 'developer',
+			status     TEXT    NOT NULL DEFAULT 'active',
+			password_hash TEXT NOT NULL DEFAULT '',
 			avatar_url TEXT    NOT NULL DEFAULT '',
 			provider   TEXT    NOT NULL DEFAULT '',
 			created_at TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -365,6 +367,7 @@ func (s *Store) migrate() error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 		CREATE INDEX IF NOT EXISTS idx_users_role  ON users(role);
+		CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
 		`
 	if _, err := s.execHook(s.db, schema); err != nil {
 		return err
@@ -459,6 +462,25 @@ func (s *Store) migrate() error {
 		return err
 	}
 	if _, err := s.execHook(s.db, `INSERT OR IGNORE INTO sync_state (target_key, lifecycle, updated_at) VALUES ('cloud', 'idle', datetime('now'))`); err != nil {
+		return err
+	}
+
+	if err := s.addColumnIfNotExists("users", "status", "TEXT NOT NULL DEFAULT 'active'"); err != nil {
+		return err
+	}
+	if err := s.addColumnIfNotExists("users", "password_hash", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := s.execHook(s.db, `CREATE INDEX IF NOT EXISTS idx_users_status ON users(status)`); err != nil {
+		return err
+	}
+	if _, err := s.execHook(s.db, `UPDATE users SET role = 'developer' WHERE role = 'viewer'`); err != nil {
+		return err
+	}
+	if _, err := s.execHook(s.db, `UPDATE users SET status = 'active' WHERE status IS NULL OR status = ''`); err != nil {
+		return err
+	}
+	if _, err := s.execHook(s.db, `UPDATE users SET password_hash = '' WHERE password_hash IS NULL`); err != nil {
 		return err
 	}
 

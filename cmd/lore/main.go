@@ -69,8 +69,11 @@ var (
 	newMCPServerWithConfig = mcp.NewServerWithConfig
 	resolveMCPTools        = mcp.ResolveTools
 	serveMCP               = mcpserver.ServeStdio
-	newMCPHTTPHandler      = mcp.NewHTTPHandler
-	mountAdmin             = admin.Mount
+	mcpHTTPJWTSecret       []byte
+	newMCPHTTPHandler      = func(s store.Contract, projectHint string) http.Handler {
+		return mcp.NewHTTPHandlerWithConfig(s, mcp.HTTPHandlerConfig{DefaultProject: projectHint, JWTSecret: mcpHTTPJWTSecret})
+	}
+	mountAdmin = admin.Mount
 
 	// detectProject is injectable for testing; wraps project.DetectProject.
 	detectProject = project.DetectProject
@@ -121,6 +124,21 @@ func openConfiguredStore(cfg store.Config) (store.Contract, error) {
 		return nil, err
 	}
 	return storeOpen(storageCfg.Apply(cfg))
+}
+
+func bootstrapRuntimeAdmin(s store.Contract, cfg RuntimeConfig) error {
+	if strings.TrimSpace(cfg.BootstrapAdminPassword) == "" {
+		return nil
+	}
+
+	passwordHash, err := store.HashPassword(cfg.BootstrapAdminPassword)
+	if err != nil {
+		return fmt.Errorf("lore bootstrap admin: hash password: %w", err)
+	}
+	if _, err := s.BootstrapAdmin(cfg.BootstrapAdminEmail, cfg.BootstrapAdminName, passwordHash); err != nil {
+		return fmt.Errorf("lore bootstrap admin: %w", err)
+	}
+	return nil
 }
 
 func main() {
@@ -219,6 +237,10 @@ func cmdServe(cfg store.Config) {
 	}
 	defer s.Close()
 
+	if err := bootstrapRuntimeAdmin(s, runtimeCfg); err != nil {
+		fatal(err)
+	}
+
 	srv := newHTTPServer(s, server.Config{Host: runtimeCfg.Host, Port: runtimeCfg.Port, Version: version})
 
 	// Project detection chain: LORE_PROJECT env → git detection.
@@ -230,11 +252,6 @@ func cmdServe(cfg store.Config) {
 		}
 	}
 	projectHint, _ = store.NormalizeProject(projectHint)
-
-	// Mount MCP HTTP handler at /mcp.
-	mcpHandler := newMCPHTTPHandler(s, projectHint)
-	srv.SetMCPHandler(mcpHandler)
-	log.Printf("[lore] MCP HTTP endpoint: %s/mcp", runtimeCfg.BaseURL)
 
 	// ── Admin web panel ──────────────────────────────────────────────────────
 	// Build AdminConfig from environment variables.
@@ -248,6 +265,13 @@ func cmdServe(cfg store.Config) {
 			log.Printf("[lore] WARN: LORE_JWT_SECRET is not set — generated a random JWT secret; admin sessions will not survive restarts")
 		}
 	}
+
+	// Mount MCP HTTP handler at /mcp after resolving the JWT secret so bearer
+	// auth shares the same runtime identity plane as browser sessions.
+	mcpHTTPJWTSecret = jwtSecret
+	mcpHandler := newMCPHTTPHandler(s, projectHint)
+	srv.SetMCPHandler(mcpHandler)
+	log.Printf("[lore] MCP HTTP endpoint: %s/mcp", runtimeCfg.BaseURL)
 
 	adminCfg := admin.AdminConfig{
 		Store:              s,
