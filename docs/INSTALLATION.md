@@ -128,11 +128,14 @@ Required env/runtime contract:
 - `LORE_ENV=staging` — REQUIRED for the hosted preview contract.
 - `LORE_BASE_URL` — REQUIRED. Set this to the public Railway URL (for example `https://<your-service>.up.railway.app`).
 - `LORE_JWT_SECRET` — REQUIRED. Use a persistent 32+ byte secret; staging startup fails if it is missing or shorter.
+- `LORE_BOOTSTRAP_ADMIN_PASSWORD` — REQUIRED. Lore will not invent a default password in any environment.
+- `LORE_BOOTSTRAP_ADMIN_EMAIL` — REQUIRED in staging. If omitted locally, Lore defaults only the email to `admin@admin.com`.
+- `LORE_BOOTSTRAP_ADMIN_NAME` — optional display name for the bootstrap admin.
 - `PORT` — injected by Railway.
 - `LORE_PORT` — optional override; if set, it wins. Railway injects `PORT`; leave `LORE_PORT` unset unless you intentionally need to override the platform port.
 - `LORE_HOST` — optional; staging already defaults to `0.0.0.0`, so only set it if you are overriding host behavior explicitly.
 
-Set `LORE_ENV=staging`, `DATABASE_URL`, `LORE_BASE_URL`, and `LORE_JWT_SECRET` for the hosted preview contract. Bind/base URL behavior must stay explicit: bind on the Railway-visible host/port, but publish the external URL through `LORE_BASE_URL` so callbacks, links, and MCP clients use the public address instead of an internal bind target.
+Set `LORE_ENV=staging`, `DATABASE_URL`, `LORE_BASE_URL`, and `LORE_JWT_SECRET` for the hosted preview contract. Also set the bootstrap admin env vars before exposing the runtime publicly. Bind/base URL behavior must stay explicit: bind on the Railway-visible host/port, but publish the external URL through `LORE_BASE_URL` so callbacks, links, and MCP clients use the public address instead of an internal bind target.
 
 Minimal smoke steps after deploy:
 
@@ -146,7 +149,7 @@ The response should be `200 OK` only when the PostgreSQL-backed store is reachab
 ${LORE_BASE_URL}/mcp
 ```
 
-The smoke is complete when the MCP client initializes successfully and can perform a minimal runtime flow. For PostgreSQL-backed hosted validation, include skill-catalog reads such as `lore_list_skills`, `lore_get_skill`, or `skills://{name}` after seeding a test skill.
+The smoke is complete when the MCP client initializes successfully and can perform a minimal runtime flow with `Authorization: Bearer <jwt>`. For PostgreSQL-backed hosted validation, include skill-catalog reads such as `lore_list_skills`, `lore_get_skill`, or `skills://{name}` after seeding a test skill. Pending, disabled, or deleted users should receive `403` even if their token was minted earlier.
 
 Excluded scope: no web view/dashboard/browser UI work, no TUI work, no agent configurators/plugins, and no production auth or multi-user hardening.
 
@@ -165,9 +168,19 @@ Excluded scope: no web view/dashboard/browser UI work, no TUI work, no agent con
 | `LORE_HOST` | Bind host override | `127.0.0.1` local / `0.0.0.0` staging |
 | `LORE_BASE_URL` | Public base URL for hosted/staging runtime | derived locally |
 | `LORE_JWT_SECRET` | JWT secret for admin/auth; staging requires 32+ bytes | generated per process locally if unset |
+| `LORE_BOOTSTRAP_ADMIN_EMAIL` | Bootstrap admin email; required in staging | `admin@admin.com` locally when unset |
+| `LORE_BOOTSTRAP_ADMIN_PASSWORD` | Bootstrap admin password; never auto-generated | unset |
+| `LORE_BOOTSTRAP_ADMIN_NAME` | Bootstrap admin display name | unset |
 | `LORE_COOKIE_SECURE` | Override secure cookie behavior | env-dependent |
 | `LORE_GOOGLE_CLIENT_ID` / `LORE_GOOGLE_CLIENT_SECRET` | Optional Google auth | unset |
 | `LORE_GITHUB_CLIENT_ID` / `LORE_GITHUB_CLIENT_SECRET` | Optional GitHub auth | unset |
+
+User lifecycle for this MVP:
+
+- Registration defaults to `role=na`, `status=pending`.
+- Admins can move users to `active` or `disabled` and assign only the canonical roles `admin`, `tech_lead`, `developer`, or `na`.
+- OAuth follows the same lifecycle; OAuth-created users remain pending until approved.
+- JWTs are checked against current store state on protected requests, but Lore does not yet ship refresh tokens, token rotation, or a dedicated revocation list.
 
 Backend selection:
 

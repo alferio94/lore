@@ -56,6 +56,24 @@ type noopStore struct{ store.Contract }
 
 func (noopStore) Close() error { return nil }
 
+func (noopStore) BootstrapAdmin(string, string, string) (*store.User, error) { return nil, nil }
+
+type bootstrapRecorderStore struct {
+	noopStore
+	called       bool
+	email        string
+	name         string
+	passwordHash string
+}
+
+func (s *bootstrapRecorderStore) BootstrapAdmin(email, name, passwordHash string) (*store.User, error) {
+	s.called = true
+	s.email = email
+	s.name = name
+	s.passwordHash = passwordHash
+	return &store.User{Email: email, Name: name, Role: store.UserRoleAdmin, Status: store.UserStatusActive}, nil
+}
+
 func stubCheckForUpdates(t *testing.T, result versioncheck.CheckResult) {
 	t.Helper()
 	old := checkForUpdates
@@ -140,6 +158,9 @@ func TestLoadRuntimeConfigLocalDefaults(t *testing.T) {
 	t.Setenv("LORE_GOOGLE_CLIENT_SECRET", "")
 	t.Setenv("LORE_GITHUB_CLIENT_ID", "")
 	t.Setenv("LORE_GITHUB_CLIENT_SECRET", "")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_EMAIL", "")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_NAME", "")
 
 	runtimeCfg, err := loadRuntimeConfig([]string{})
 	if err != nil {
@@ -161,6 +182,12 @@ func TestLoadRuntimeConfigLocalDefaults(t *testing.T) {
 	if runtimeCfg.CookieSecure {
 		t.Fatalf("CookieSecure = true, want false")
 	}
+	if runtimeCfg.BootstrapAdminEmail != "admin@admin.com" {
+		t.Fatalf("BootstrapAdminEmail = %q, want admin@admin.com", runtimeCfg.BootstrapAdminEmail)
+	}
+	if runtimeCfg.BootstrapAdminPassword != "" {
+		t.Fatalf("BootstrapAdminPassword = %q, want empty", runtimeCfg.BootstrapAdminPassword)
+	}
 }
 
 func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
@@ -173,10 +200,13 @@ func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
 	t.Setenv("LORE_GOOGLE_CLIENT_SECRET", "")
 	t.Setenv("LORE_GITHUB_CLIENT_ID", "")
 	t.Setenv("LORE_GITHUB_CLIENT_SECRET", "")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_EMAIL", "")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_NAME", "")
 
 	t.Run("missing LORE_BASE_URL", func(t *testing.T) {
 		t.Setenv("LORE_BASE_URL", "")
 		t.Setenv("LORE_JWT_SECRET", "staging-secret-at-least-32-bytes")
+		t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-secret")
 
 		_, err := loadRuntimeConfig(nil)
 		if err == nil || !strings.Contains(err.Error(), "LORE_BASE_URL is required when LORE_ENV=staging") {
@@ -187,6 +217,7 @@ func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
 	t.Run("missing LORE_JWT_SECRET", func(t *testing.T) {
 		t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
 		t.Setenv("LORE_JWT_SECRET", "")
+		t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-secret")
 
 		_, err := loadRuntimeConfig(nil)
 		if err == nil || !strings.Contains(err.Error(), "LORE_JWT_SECRET is required when LORE_ENV=staging") {
@@ -197,6 +228,7 @@ func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
 	t.Run("short LORE_JWT_SECRET", func(t *testing.T) {
 		t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
 		t.Setenv("LORE_JWT_SECRET", "short-secret")
+		t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-secret")
 
 		_, err := loadRuntimeConfig(nil)
 		if err == nil || !strings.Contains(err.Error(), "LORE_JWT_SECRET must be at least 32 bytes") {
@@ -204,9 +236,22 @@ func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
 		}
 	})
 
+	t.Run("missing LORE_BOOTSTRAP_ADMIN_PASSWORD", func(t *testing.T) {
+		t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
+		t.Setenv("LORE_JWT_SECRET", "staging-secret-at-least-32-bytes")
+		t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "")
+
+		_, err := loadRuntimeConfig(nil)
+		if err == nil || !strings.Contains(err.Error(), "LORE_BOOTSTRAP_ADMIN_PASSWORD is required when LORE_ENV=staging") {
+			t.Fatalf("expected bootstrap password staging error, got %v", err)
+		}
+	})
+
 	t.Run("staging defaults", func(t *testing.T) {
 		t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
 		t.Setenv("LORE_JWT_SECRET", "staging-secret-at-least-32-bytes")
+		t.Setenv("LORE_BOOTSTRAP_ADMIN_EMAIL", "admin@staging.lore.local")
+		t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-secret")
 
 		runtimeCfg, err := loadRuntimeConfig(nil)
 		if err != nil {
@@ -221,6 +266,21 @@ func TestLoadRuntimeConfigStagingGuardrails(t *testing.T) {
 		if !runtimeCfg.CookieSecure {
 			t.Fatalf("CookieSecure = false, want true")
 		}
+		if runtimeCfg.BootstrapAdminEmail != "admin@staging.lore.local" {
+			t.Fatalf("BootstrapAdminEmail = %q, want admin@staging.lore.local", runtimeCfg.BootstrapAdminEmail)
+		}
+	})
+
+	t.Run("missing LORE_BOOTSTRAP_ADMIN_EMAIL", func(t *testing.T) {
+		t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
+		t.Setenv("LORE_JWT_SECRET", "staging-secret-at-least-32-bytes")
+		t.Setenv("LORE_BOOTSTRAP_ADMIN_EMAIL", "")
+		t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-secret")
+
+		_, err := loadRuntimeConfig(nil)
+		if err == nil || !strings.Contains(err.Error(), "LORE_BOOTSTRAP_ADMIN_EMAIL is required when LORE_ENV=staging") {
+			t.Fatalf("expected bootstrap email staging error, got %v", err)
+		}
 	})
 }
 
@@ -232,6 +292,8 @@ func TestLoadRuntimeConfigRailwayStagingUsesPublicURLAndPortFallback(t *testing.
 	t.Setenv("LORE_BASE_URL", "https://preview.up.railway.app")
 	t.Setenv("LORE_JWT_SECRET", "railway-secret-at-least-32-bytes")
 	t.Setenv("LORE_COOKIE_SECURE", "")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_EMAIL", "admin@railway.local")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-secret")
 
 	runtimeCfg, err := loadRuntimeConfig(nil)
 	if err != nil {
@@ -252,6 +314,27 @@ func TestLoadRuntimeConfigRailwayStagingUsesPublicURLAndPortFallback(t *testing.
 	}
 	if !runtimeCfg.CookieSecure {
 		t.Fatalf("CookieSecure = false, want true")
+	}
+}
+
+func TestLoadRuntimeConfigUsesExplicitBootstrapAdminValues(t *testing.T) {
+	t.Setenv("LORE_ENV", "local")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_EMAIL", "owner@example.com")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "secret-password")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_NAME", "Owner")
+
+	runtimeCfg, err := loadRuntimeConfig(nil)
+	if err != nil {
+		t.Fatalf("loadRuntimeConfig() error = %v", err)
+	}
+	if runtimeCfg.BootstrapAdminEmail != "owner@example.com" {
+		t.Fatalf("BootstrapAdminEmail = %q, want owner@example.com", runtimeCfg.BootstrapAdminEmail)
+	}
+	if runtimeCfg.BootstrapAdminPassword != "secret-password" {
+		t.Fatalf("BootstrapAdminPassword = %q, want secret-password", runtimeCfg.BootstrapAdminPassword)
+	}
+	if runtimeCfg.BootstrapAdminName != "Owner" {
+		t.Fatalf("BootstrapAdminName = %q, want Owner", runtimeCfg.BootstrapAdminName)
 	}
 }
 
@@ -456,6 +539,7 @@ func TestCmdServeStagingMissingJWTSecretFailsFast(t *testing.T) {
 	t.Setenv("LORE_ENV", "staging")
 	t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
 	t.Setenv("LORE_JWT_SECRET", "")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-secret")
 	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
 	withArgs(t, "lore", "serve")
 
@@ -514,6 +598,8 @@ func TestCmdServeStagingMissingDatabaseURLFailsFastBeforeStoreInit(t *testing.T)
 	t.Setenv("LORE_ENV", "staging")
 	t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
 	t.Setenv("LORE_JWT_SECRET", "staging-secret-at-least-32-bytes")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_EMAIL", "admin@staging.lore.local")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-secret")
 	t.Setenv("DATABASE_URL", "")
 	withArgs(t, "lore", "serve")
 
@@ -543,6 +629,8 @@ func TestCmdServeStagingNonPostgresDatabaseURLFailsFastBeforeStoreInit(t *testin
 	t.Setenv("LORE_ENV", "staging")
 	t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
 	t.Setenv("LORE_JWT_SECRET", "staging-secret-at-least-32-bytes")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_EMAIL", "admin@staging.lore.local")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-secret")
 	t.Setenv("DATABASE_URL", "sqlite:///tmp/lore.db")
 	withArgs(t, "lore", "serve")
 
@@ -668,6 +756,7 @@ func TestCmdServeStagingMissingBaseURLFailsFast(t *testing.T) {
 	t.Setenv("LORE_ENV", "staging")
 	t.Setenv("LORE_BASE_URL", "")
 	t.Setenv("LORE_JWT_SECRET", "staging-secret-at-least-32-bytes")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-secret")
 	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
 	withArgs(t, "lore", "serve")
 
@@ -697,6 +786,8 @@ func TestCmdServeStagingWithRequiredVarsStartsSuccessfully(t *testing.T) {
 	t.Setenv("LORE_ENV", "staging")
 	t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
 	t.Setenv("LORE_JWT_SECRET", "super-secret-at-least-32-bytes-long")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_EMAIL", "admin@staging.lore.local")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-secret")
 	t.Setenv("LORE_HOST", "")
 	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
 	withArgs(t, "lore", "serve")
@@ -746,6 +837,8 @@ func TestCmdServeRailwayStagingUsesPostgresStorageAndPortFallback(t *testing.T) 
 	t.Setenv("PORT", "8443")
 	t.Setenv("LORE_BASE_URL", "https://preview.up.railway.app")
 	t.Setenv("LORE_JWT_SECRET", "railway-secret-at-least-32-bytes")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_EMAIL", "admin@railway.local")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-secret")
 	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
 	withArgs(t, "lore", "serve")
 
@@ -781,6 +874,50 @@ func TestCmdServeRailwayStagingUsesPostgresStorageAndPortFallback(t *testing.T) 
 	}
 	if seenPort != 8443 {
 		t.Fatalf("Port = %d, want 8443 from PORT fallback", seenPort)
+	}
+}
+
+func TestCmdServeBootstrapsAdminBeforeStartingHTTP(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+
+	t.Setenv("LORE_ENV", "staging")
+	t.Setenv("LORE_BASE_URL", "https://staging.lore.local")
+	t.Setenv("LORE_JWT_SECRET", "super-secret-at-least-32-bytes-long")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_EMAIL", "admin@example.com")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-password")
+	t.Setenv("LORE_BOOTSTRAP_ADMIN_NAME", "Bootstrap Admin")
+	t.Setenv("DATABASE_URL", "postgres://lore:secret@db.internal:5432/lore")
+	withArgs(t, "lore", "serve")
+
+	recorder := &bootstrapRecorderStore{}
+	startSawBootstrap := false
+	storeOpen = func(in store.Config) (store.Contract, error) {
+		return recorder, nil
+	}
+	startHTTP = func(_ *server.Server) error {
+		startSawBootstrap = recorder.called
+		if recorder.passwordHash == "" {
+			t.Fatalf("expected bootstrap password hash before HTTP start")
+		}
+		if recorder.passwordHash == "bootstrap-password" {
+			t.Fatalf("expected hashed bootstrap password, got plain text")
+		}
+		return nil
+	}
+
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdServe(cfg) })
+	if recovered != nil {
+		t.Fatalf("expected successful startup, got panic=%v stderr=%q", recovered, stderr)
+	}
+	if !startSawBootstrap {
+		t.Fatalf("expected bootstrap admin to run before HTTP start")
+	}
+	if recorder.email != "admin@example.com" {
+		t.Fatalf("bootstrap email = %q, want admin@example.com", recorder.email)
+	}
+	if recorder.name != "Bootstrap Admin" {
+		t.Fatalf("bootstrap name = %q, want Bootstrap Admin", recorder.name)
 	}
 }
 

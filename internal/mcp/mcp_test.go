@@ -106,6 +106,53 @@ func TestNewServerRegistersTools(t *testing.T) {
 	}
 }
 
+func TestRoleToolAllowlistDeveloperUsesAgentProfile(t *testing.T) {
+	allowlist := roleToolAllowlist(store.UserRoleDeveloper)
+	if allowlist == nil {
+		t.Fatal("expected developer allowlist, got nil")
+	}
+	for _, tool := range []string{"lore_save", "lore_search", "lore_update", "lore_list_skills", "lore_get_skill"} {
+		if !allowlist[tool] {
+			t.Fatalf("expected developer allowlist to include %q", tool)
+		}
+	}
+	for _, tool := range []string{"lore_delete", "lore_merge_projects"} {
+		if allowlist[tool] {
+			t.Fatalf("expected developer allowlist to exclude %q", tool)
+		}
+	}
+}
+
+func TestRoleToolAllowlistTechLeadMatchesDeveloperUntilGovernanceToolsExist(t *testing.T) {
+	developer := roleToolAllowlist(store.UserRoleDeveloper)
+	techLead := roleToolAllowlist(store.UserRoleTechLead)
+	if len(techLead) != len(developer) {
+		t.Fatalf("expected tech_lead allowlist to match developer size, got %d want %d", len(techLead), len(developer))
+	}
+	for tool := range developer {
+		if !techLead[tool] {
+			t.Fatalf("expected tech_lead allowlist to include developer tool %q", tool)
+		}
+	}
+}
+
+func TestRoleToolAllowlistAdminGetsAllTools(t *testing.T) {
+	allowlist := roleToolAllowlist(store.UserRoleAdmin)
+	if allowlist != nil {
+		t.Fatal("expected admin allowlist to be nil (all tools)")
+	}
+}
+
+func TestRoleToolAllowlistNAHasNoEffectivePermissions(t *testing.T) {
+	allowlist := roleToolAllowlist(store.UserRoleNA)
+	if allowlist == nil {
+		t.Fatal("expected NA allowlist to be empty, not nil")
+	}
+	if len(allowlist) != 0 {
+		t.Fatalf("expected no tools for NA role, got %v", allowlist)
+	}
+}
+
 func TestHandleSuggestTopicKeyReturnsFamilyBasedKey(t *testing.T) {
 	h := handleSuggestTopicKey()
 	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{

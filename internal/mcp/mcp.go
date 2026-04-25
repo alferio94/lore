@@ -16,12 +16,15 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	projectpkg "github.com/alferio94/lore/internal/project"
 	"github.com/alferio94/lore/internal/store"
+	jwtlib "github.com/golang-jwt/jwt/v5"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -29,6 +32,19 @@ import (
 // MCPConfig holds configuration for the MCP server.
 type MCPConfig struct {
 	DefaultProject string // Auto-detected project name, used when LLM sends empty project
+}
+
+// HTTPHandlerConfig controls the HTTP-mounted MCP surface.
+type HTTPHandlerConfig struct {
+	DefaultProject string
+	JWTSecret      []byte
+}
+
+type httpClaims struct {
+	jwtlib.RegisteredClaims
+	Email string `json:"email"`
+	Name  string `json:"name"`
+	Role  string `json:"role"`
 }
 
 var suggestTopicKey = store.SuggestTopicKey
@@ -157,6 +173,10 @@ func NewServerWithTools(s store.Contract, allowlist map[string]bool) *server.MCP
 // NewServerWithConfig creates an MCP server with full configuration including
 // default project detection and optional tool allowlist.
 func NewServerWithConfig(s store.Contract, cfg MCPConfig, allowlist map[string]bool) *server.MCPServer {
+	return newServerWithAccessConfig(s, cfg, allowlist, true)
+}
+
+func newServerWithAccessConfig(s store.Contract, cfg MCPConfig, allowlist map[string]bool, allowSkillResources bool) *server.MCPServer {
 	srv := server.NewMCPServer(
 		"lore",
 		"0.1.0",
@@ -166,7 +186,9 @@ func NewServerWithConfig(s store.Contract, cfg MCPConfig, allowlist map[string]b
 	)
 
 	registerTools(srv, s, cfg, allowlist)
-	registerResources(srv, s)
+	if allowSkillResources {
+		registerResources(srv, s)
+	}
 	return srv
 }
 
@@ -178,9 +200,125 @@ func NewServerWithConfig(s store.Contract, cfg MCPConfig, allowlist map[string]b
 // like "/mcp". projectHint is used as the default project name when the LLM
 // does not provide one.
 func NewHTTPHandler(st store.Contract, projectHint string) http.Handler {
-	cfg := MCPConfig{DefaultProject: projectHint}
-	mcpSrv := NewServerWithConfig(st, cfg, nil)
-	return server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
+	return NewHTTPHandlerWithConfig(st, HTTPHandlerConfig{DefaultProject: projectHint})
+}
+
+// NewHTTPHandlerWithConfig creates an HTTP MCP handler with optional bearer auth.
+// When JWTSecret is empty, the handler remains open for backwards-compatible tests
+// and non-runtime callers. When JWTSecret is set, requests must present a valid
+// bearer token, the actor is reloaded from the store, and tools are filtered by
+// the actor's current role.
+func NewHTTPHandlerWithConfig(st store.Contract, cfg HTTPHandlerConfig) http.Handler {
+	baseCfg := MCPConfig{DefaultProject: cfg.DefaultProject}
+	if len(cfg.JWTSecret) == 0 {
+		mcpSrv := newServerWithAccessConfig(st, baseCfg, nil, true)
+		return server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
+	}
+
+	adminHandler := server.NewStreamableHTTPServer(newServerWithAccessConfig(st, baseCfg, nil, true), server.WithStateLess(true))
+	agentHandler := server.NewStreamableHTTPServer(newServerWithAccessConfig(st, baseCfg, roleToolAllowlist(store.UserRoleDeveloper), true), server.WithStateLess(true))
+	noToolsHandler := server.NewStreamableHTTPServer(newServerWithAccessConfig(st, baseCfg, roleToolAllowlist(store.UserRoleNA), false), server.WithStateLess(true))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actor, status, message := authenticateHTTPActor(st, cfg.JWTSecret, r)
+		if status != 0 {
+			writeHTTPAuthError(w, status, message)
+			return
+		}
+
+		switch actor.Role {
+		case store.UserRoleAdmin:
+			adminHandler.ServeHTTP(w, r)
+		case store.UserRoleTechLead, store.UserRoleDeveloper:
+			agentHandler.ServeHTTP(w, r)
+		case store.UserRoleNA:
+			noToolsHandler.ServeHTTP(w, r)
+		default:
+			writeHTTPAuthError(w, http.StatusForbidden, "forbidden")
+		}
+	})
+}
+
+func roleToolAllowlist(role string) map[string]bool {
+	switch role {
+	case store.UserRoleAdmin:
+		return nil
+	case store.UserRoleTechLead, store.UserRoleDeveloper:
+		return cloneAllowlist(ProfileAgent)
+	default:
+		return map[string]bool{}
+	}
+}
+
+func cloneAllowlist(src map[string]bool) map[string]bool {
+	if src == nil {
+		return nil
+	}
+	clone := make(map[string]bool, len(src))
+	for k, v := range src {
+		clone[k] = v
+	}
+	return clone
+}
+
+func authenticateHTTPActor(st store.Contract, secret []byte, r *http.Request) (*store.User, int, string) {
+	tokenStr, ok := extractBearerToken(r.Header.Get("Authorization"))
+	if !ok {
+		return nil, http.StatusUnauthorized, "missing_bearer_token"
+	}
+
+	claims, err := parseHTTPJWT(secret, tokenStr)
+	if err != nil {
+		return nil, http.StatusUnauthorized, "invalid_bearer_token"
+	}
+
+	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
+	if err != nil {
+		return nil, http.StatusUnauthorized, "invalid_bearer_token"
+	}
+
+	actor, err := st.GetUserByID(userID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, http.StatusForbidden, "stale_actor"
+		}
+		return nil, http.StatusInternalServerError, "failed_to_load_actor"
+	}
+	if actor.Status != store.UserStatusActive {
+		return nil, http.StatusForbidden, "account_inactive"
+	}
+	return actor, 0, ""
+}
+
+func extractBearerToken(header string) (string, bool) {
+	parts := strings.Fields(strings.TrimSpace(header))
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || strings.TrimSpace(parts[1]) == "" {
+		return "", false
+	}
+	return parts[1], true
+}
+
+func parseHTTPJWT(secret []byte, tokenStr string) (*httpClaims, error) {
+	token, err := jwtlib.ParseWithClaims(tokenStr, &httpClaims{}, func(t *jwtlib.Token) (any, error) {
+		if _, ok := t.Method.(*jwtlib.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return secret, nil
+	}, jwtlib.WithValidMethods([]string{"HS256"}))
+	if err != nil {
+		return nil, err
+	}
+	claims, ok := token.Claims.(*httpClaims)
+	if !ok || !token.Valid {
+		return nil, errors.New("invalid token claims")
+	}
+	return claims, nil
+}
+
+func writeHTTPAuthError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 // shouldRegister returns true if the tool should be registered given the

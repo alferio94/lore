@@ -188,7 +188,9 @@ func Bootstrap(db *sql.DB) error {
 			id BIGSERIAL PRIMARY KEY,
 			email TEXT NOT NULL UNIQUE,
 			name TEXT NOT NULL DEFAULT '',
-			role TEXT NOT NULL DEFAULT 'viewer',
+			role TEXT NOT NULL DEFAULT 'developer',
+			status TEXT NOT NULL DEFAULT 'active',
+			password_hash TEXT NOT NULL DEFAULT '',
 			avatar_url TEXT NOT NULL DEFAULT '',
 			provider TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL DEFAULT to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS'),
@@ -196,6 +198,15 @@ func Bootstrap(db *sql.DB) error {
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_pg_users_email ON users(email)`,
 		`CREATE INDEX IF NOT EXISTS idx_pg_users_role ON users(role)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_users_status ON users(status)`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ALTER COLUMN role SET DEFAULT 'developer'`,
+		`ALTER TABLE users ALTER COLUMN status SET DEFAULT 'active'`,
+		`ALTER TABLE users ALTER COLUMN password_hash SET DEFAULT ''`,
+		`UPDATE users SET role = 'developer' WHERE role = 'viewer'`,
+		`UPDATE users SET status = 'active' WHERE status IS NULL OR status = ''`,
+		`UPDATE users SET password_hash = '' WHERE password_hash IS NULL`,
 	}
 
 	for _, statement := range statements {

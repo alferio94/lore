@@ -1168,26 +1168,27 @@ func (s *PostgresStore) UpsertUser(email, name, avatarURL, provider string) (*Us
 			return err
 		}
 
-		role := "viewer"
+		role := UserRoleDeveloper
 		if count == 0 {
-			role = "admin"
+			role = UserRoleAdmin
 		}
 
 		var upserted User
 		if err := tx.QueryRow(`
-			INSERT INTO users (email, name, role, avatar_url, provider)
-			VALUES ($1, $2, $3, $4, $5)
+			INSERT INTO users (email, name, role, status, avatar_url, provider, password_hash)
+			VALUES ($1, $2, $3, $4, $5, $6, '')
 			ON CONFLICT(email) DO UPDATE SET
 				name = EXCLUDED.name,
 				avatar_url = EXCLUDED.avatar_url,
 				provider = EXCLUDED.provider,
 				updated_at = to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')
-			RETURNING id, email, name, role, avatar_url, provider, created_at, updated_at
-		`, email, name, role, avatarURL, provider).Scan(
+			RETURNING id, email, name, role, status, avatar_url, provider, created_at, updated_at
+		`, email, name, role, UserStatusActive, avatarURL, provider).Scan(
 			&upserted.ID,
 			&upserted.Email,
 			&upserted.Name,
 			&upserted.Role,
+			&upserted.Status,
 			&upserted.AvatarURL,
 			&upserted.Provider,
 			&upserted.CreatedAt,
@@ -1204,9 +1205,84 @@ func (s *PostgresStore) UpsertUser(email, name, avatarURL, provider string) (*Us
 	return user, nil
 }
 
+func (s *PostgresStore) CreatePendingUser(email, name, passwordHash string) (*User, error) {
+	var user *User
+	err := s.withTx(func(tx *sql.Tx) error {
+		var created User
+		if err := tx.QueryRow(`
+			INSERT INTO users (email, name, role, status, password_hash, avatar_url, provider)
+			VALUES ($1, $2, $3, $4, $5, '', 'password')
+			RETURNING id, email, name, role, status, avatar_url, provider, created_at, updated_at
+		`, email, name, UserRoleNA, UserStatusPending, passwordHash).Scan(
+			&created.ID,
+			&created.Email,
+			&created.Name,
+			&created.Role,
+			&created.Status,
+			&created.AvatarURL,
+			&created.Provider,
+			&created.CreatedAt,
+			&created.UpdatedAt,
+		); err != nil {
+			return normalizePostgresCatalogError(err)
+		}
+		user = &created
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+func (s *PostgresStore) GetUserByEmail(email string) (*User, error) {
+	row := s.db.QueryRow(`
+		SELECT id, email, name, role, status, avatar_url, provider, created_at, updated_at
+		FROM users WHERE email = $1
+	`, email)
+	var user User
+	if err := scanUser(row, &user); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, normalizePostgresCatalogError(err)
+	}
+	return &user, nil
+}
+
+func (s *PostgresStore) GetUserAuthByEmail(email string) (*UserAuth, error) {
+	row := s.db.QueryRow(`
+		SELECT id, email, name, role, status, avatar_url, provider, password_hash, created_at, updated_at
+		FROM users WHERE email = $1
+	`, email)
+	var user UserAuth
+	if err := scanUserAuth(row, &user); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, normalizePostgresCatalogError(err)
+	}
+	return &user, nil
+}
+
+func (s *PostgresStore) GetUserByID(id int64) (*User, error) {
+	row := s.db.QueryRow(`
+		SELECT id, email, name, role, status, avatar_url, provider, created_at, updated_at
+		FROM users WHERE id = $1
+	`, id)
+	var user User
+	if err := scanUser(row, &user); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, normalizePostgresCatalogError(err)
+	}
+	return &user, nil
+}
+
 func (s *PostgresStore) ListUsers() ([]User, error) {
 	rows, err := s.db.Query(`
-		SELECT id, email, name, role, avatar_url, provider, created_at, updated_at
+		SELECT id, email, name, role, status, avatar_url, provider, created_at, updated_at
 		FROM users
 		ORDER BY created_at ASC
 	`)
@@ -1230,19 +1306,28 @@ func (s *PostgresStore) ListUsers() ([]User, error) {
 }
 
 func (s *PostgresStore) UpdateUserRole(id int64, role string) (*User, error) {
+	current, err := s.GetUserByID(id)
+	if err != nil {
+		return nil, err
+	}
+	return s.UpdateUserStatusRole(id, current.Status, role)
+}
+
+func (s *PostgresStore) UpdateUserStatusRole(id int64, status, role string) (*User, error) {
 	var user *User
 	err := s.withTx(func(tx *sql.Tx) error {
 		var updated User
 		err := tx.QueryRow(`
 			UPDATE users
-			SET role = $1, updated_at = to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')
-			WHERE id = $2
-			RETURNING id, email, name, role, avatar_url, provider, created_at, updated_at
-		`, role, id).Scan(
+			SET role = $1, status = $2, updated_at = to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')
+			WHERE id = $3
+			RETURNING id, email, name, role, status, avatar_url, provider, created_at, updated_at
+		`, role, status, id).Scan(
 			&updated.ID,
 			&updated.Email,
 			&updated.Name,
 			&updated.Role,
+			&updated.Status,
 			&updated.AvatarURL,
 			&updated.Provider,
 			&updated.CreatedAt,
@@ -1255,6 +1340,74 @@ func (s *PostgresStore) UpdateUserRole(id int64, role string) (*User, error) {
 			return normalizePostgresCatalogError(err)
 		}
 		user = &updated
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+func (s *PostgresStore) BootstrapAdmin(email, name, passwordHash string) (*User, error) {
+	email = strings.TrimSpace(email)
+	if email == "" || strings.TrimSpace(passwordHash) == "" {
+		return nil, nil
+	}
+
+	var user *User
+	err := s.withTx(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return err
+		}
+
+		var existing User
+		err := tx.QueryRow(`
+			SELECT id, email, name, role, status, avatar_url, provider, created_at, updated_at
+			FROM users WHERE role = $1 ORDER BY id ASC LIMIT 1
+		`, UserRoleAdmin).Scan(
+			&existing.ID,
+			&existing.Email,
+			&existing.Name,
+			&existing.Role,
+			&existing.Status,
+			&existing.AvatarURL,
+			&existing.Provider,
+			&existing.CreatedAt,
+			&existing.UpdatedAt,
+		)
+		if err == nil {
+			user = &existing
+			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return normalizePostgresCatalogError(err)
+		}
+
+		var bootstrapped User
+		if err := tx.QueryRow(`
+			INSERT INTO users (email, name, role, status, password_hash, avatar_url, provider)
+			VALUES ($1, $2, $3, $4, $5, '', 'bootstrap')
+			ON CONFLICT(email) DO UPDATE SET
+				name = CASE WHEN users.name = '' THEN EXCLUDED.name ELSE users.name END,
+				role = $3,
+				status = $4,
+				password_hash = CASE WHEN users.password_hash = '' THEN EXCLUDED.password_hash ELSE users.password_hash END,
+				updated_at = to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')
+			RETURNING id, email, name, role, status, avatar_url, provider, created_at, updated_at
+		`, email, name, UserRoleAdmin, UserStatusActive, passwordHash).Scan(
+			&bootstrapped.ID,
+			&bootstrapped.Email,
+			&bootstrapped.Name,
+			&bootstrapped.Role,
+			&bootstrapped.Status,
+			&bootstrapped.AvatarURL,
+			&bootstrapped.Provider,
+			&bootstrapped.CreatedAt,
+			&bootstrapped.UpdatedAt,
+		); err != nil {
+			return normalizePostgresCatalogError(err)
+		}
+		user = &bootstrapped
 		return nil
 	})
 	if err != nil {
@@ -1501,8 +1654,24 @@ func scanUser(scanner interface{ Scan(dest ...any) error }, user *User) error {
 		&user.Email,
 		&user.Name,
 		&user.Role,
+		&user.Status,
 		&user.AvatarURL,
 		&user.Provider,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+}
+
+func scanUserAuth(scanner interface{ Scan(dest ...any) error }, user *UserAuth) error {
+	return scanner.Scan(
+		&user.ID,
+		&user.Email,
+		&user.Name,
+		&user.Role,
+		&user.Status,
+		&user.AvatarURL,
+		&user.Provider,
+		&user.PasswordHash,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 	)

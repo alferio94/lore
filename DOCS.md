@@ -96,6 +96,9 @@ Leave `DATABASE_URL` unset and Lore uses SQLite in `~/.lore` (or `LORE_DATA_DIR`
 | `LORE_HOST` | Override bind host |
 | `LORE_BASE_URL` | Public base URL for hosted/staging runtime |
 | `LORE_JWT_SECRET` | Required in staging with at least 32 bytes; generated per-process in local mode if unset |
+| `LORE_BOOTSTRAP_ADMIN_EMAIL` | Bootstrap admin email; required in staging, defaults locally to `admin@admin.com` when unset |
+| `LORE_BOOTSTRAP_ADMIN_PASSWORD` | Bootstrap admin password; required in staging and never auto-generated |
+| `LORE_BOOTSTRAP_ADMIN_NAME` | Optional bootstrap admin display name |
 | `LORE_COOKIE_SECURE` | Override secure-cookie behavior |
 | `LORE_GOOGLE_CLIENT_ID` / `LORE_GOOGLE_CLIENT_SECRET` | Optional Google auth |
 | `LORE_GITHUB_CLIENT_ID` / `LORE_GITHUB_CLIENT_SECRET` | Optional GitHub auth |
@@ -105,7 +108,16 @@ Staging rules:
 - `LORE_ENV=staging` requires `LORE_BASE_URL`
 - `LORE_ENV=staging` requires PostgreSQL `DATABASE_URL`
 - `LORE_ENV=staging` requires `LORE_JWT_SECRET` with at least 32 bytes
+- `LORE_ENV=staging` requires `LORE_BOOTSTRAP_ADMIN_PASSWORD`
 - default host becomes `0.0.0.0`
+
+Auth model:
+
+- Bootstrap creates at most one `active admin`; it never overwrites an existing admin.
+- Self-registration creates `role=na`, `status=pending`.
+- Canonical roles: `admin`, `tech_lead`, `developer`, `na`.
+- Canonical statuses: `pending`, `active`, `disabled`.
+- OAuth follows the same approval gate; pending users cannot use browser auth or `/mcp` until activated.
 
 ## CLI Reference
 
@@ -143,6 +155,8 @@ Lore supports:
 - stdio MCP via `lore mcp`
 - HTTP MCP via `/mcp` when `lore serve` is running
 
+HTTP `/mcp` requires `Authorization: Bearer <jwt>`. Lore uses the same JWT identity format as browser sessions, but it authorizes from current store state on every request. Missing/invalid bearer tokens return `401`; pending, disabled, deleted, or otherwise stale actors return `403`. Active roles map to the existing MCP surface only: `developer` and `tech_lead` get memory read/write plus skill-read tools, `admin` gets the full/admin-delete surface, and `na` has no effective tool permissions.
+
 These are the stable Lore-owned primitives that external configurators should target.
 
 ## Local Compatibility Surfaces
@@ -170,7 +184,7 @@ Those concerns belong to external configurators or the agent client itself.
 ### Shared runtime / team deployment
 
 1. Install Lore
-2. Set `DATABASE_URL`, `LORE_BASE_URL`, and `LORE_JWT_SECRET`
+2. Set `DATABASE_URL`, `LORE_BASE_URL`, `LORE_JWT_SECRET`, and bootstrap admin env vars
 3. Run `lore serve`
 4. Connect agents through `/mcp` or `lore mcp`
 
@@ -186,3 +200,4 @@ Those concerns belong to external configurators or the agent client itself.
 - Product docs must describe cloud/runtime surfaces first.
 - Local SQLite/TUI guidance should stay available but explicitly secondary.
 - Do not add new Lore-owned vendor setup flows or packaged agent assets.
+- Document MVP auth limits honestly: current-state revocation is enforced, but token rotation, refresh flows, and full session management are not in scope yet.

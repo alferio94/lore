@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	jwtlib "github.com/golang-jwt/jwt/v5"
@@ -128,20 +129,148 @@ func setSessionCookie(w http.ResponseWriter, tokenStr string, secure bool) {
 	})
 }
 
+func clearSessionCookie(w http.ResponseWriter, secure bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/admin/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+type registerRequest struct {
+	Email    string `json:"email"`
+	Name     string `json:"name"`
+	Password string `json:"password"`
+}
+
+type loginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+func normalizeAuthStrings(email, name string) (string, string) {
+	return strings.TrimSpace(strings.ToLower(email)), strings.TrimSpace(name)
+}
+
+func (h *adminHandler) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if h.cfg.Store == nil {
+		jsonError(w, http.StatusInternalServerError, "store not configured")
+		return
+	}
+
+	var req registerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+	req.Email, req.Name = normalizeAuthStrings(req.Email, req.Name)
+	req.Password = strings.TrimSpace(req.Password)
+	if req.Email == "" || req.Name == "" || req.Password == "" {
+		jsonResponse(w, http.StatusUnprocessableEntity, map[string]any{
+			"error": "validation",
+		})
+		return
+	}
+
+	passwordHash, err := store.HashPassword(req.Password)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to hash password")
+		return
+	}
+
+	user, err := h.cfg.Store.CreatePendingUser(req.Email, req.Name, passwordHash)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to create user")
+		return
+	}
+
+	jsonResponse(w, http.StatusCreated, map[string]any{
+		"status": user.Status,
+		"user":   user,
+	})
+}
+
+func (h *adminHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if h.cfg.Store == nil {
+		jsonError(w, http.StatusInternalServerError, "store not configured")
+		return
+	}
+
+	var req loginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+	req.Email, _ = normalizeAuthStrings(req.Email, "")
+	if req.Email == "" || strings.TrimSpace(req.Password) == "" {
+		jsonResponse(w, http.StatusUnprocessableEntity, map[string]any{
+			"error": "validation",
+		})
+		return
+	}
+
+	user, err := h.cfg.Store.GetUserAuthByEmail(req.Email)
+	if err != nil {
+		jsonError(w, http.StatusUnauthorized, "invalid_credentials")
+		return
+	}
+
+	valid, err := store.VerifyPassword(req.Password, user.PasswordHash)
+	if err != nil || !valid {
+		jsonError(w, http.StatusUnauthorized, "invalid_credentials")
+		return
+	}
+	if user.Status != store.UserStatusActive {
+		jsonError(w, http.StatusForbidden, "account_inactive")
+		return
+	}
+	if !isCanonicalRole(user.Role) {
+		jsonError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	tokenStr, err := issueJWT(h.cfg, user.User)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to issue token")
+		return
+	}
+	setSessionCookie(w, tokenStr, h.cfg.CookieSecure)
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"token": tokenStr,
+		"user":  user.User,
+	})
+}
+
+func (h *adminHandler) handleLogout(w http.ResponseWriter, r *http.Request) {
+	clearSessionCookie(w, h.cfg.CookieSecure)
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "logged_out"})
+}
+
 // ─── Dev Auth ─────────────────────────────────────────────────────────────────
 
 // handleDevAuth issues an admin JWT for dev@localhost without OAuth exchange.
 // Only registered in Mount when cfg.DevAuth=true.
 func (h *adminHandler) handleDevAuth(w http.ResponseWriter, r *http.Request) {
-	devUser := store.User{
-		ID:       0,
-		Email:    "dev@localhost",
-		Name:     "Dev User",
-		Role:     "admin",
-		Provider: "dev",
+	if h.cfg.Store == nil {
+		jsonError(w, http.StatusInternalServerError, "store not configured")
+		return
+	}
+	devUser, err := h.cfg.Store.UpsertUser("dev@localhost", "Dev User", "", "dev")
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to upsert dev user")
+		return
+	}
+	devUser, err = h.cfg.Store.UpdateUserStatusRole(devUser.ID, store.UserStatusActive, store.UserRoleAdmin)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to prepare dev user")
+		return
 	}
 
-	tokenStr, err := issueJWT(h.cfg, devUser)
+	tokenStr, err := issueJWT(h.cfg, *devUser)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to issue token")
 		return
@@ -296,14 +425,35 @@ func (h *adminHandler) handleAuthCallback(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Upsert user in store
+	// Align OAuth users to the pending-approval model before issuing a session.
 	if h.cfg.Store == nil {
 		jsonError(w, http.StatusInternalServerError, "store not configured")
+		return
+	}
+	userInfo.Email, userInfo.Name = normalizeAuthStrings(userInfo.Email, userInfo.Name)
+	existing, err := h.cfg.Store.GetUserByEmail(userInfo.Email)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		jsonError(w, http.StatusInternalServerError, "failed to load user")
 		return
 	}
 	user, err := h.cfg.Store.UpsertUser(userInfo.Email, userInfo.Name, userInfo.AvatarURL, provider)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to upsert user")
+		return
+	}
+	if existing == nil {
+		user, err = h.cfg.Store.UpdateUserStatusRole(user.ID, store.UserStatusPending, store.UserRoleNA)
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "failed to update oauth user")
+			return
+		}
+	}
+	if user.Status != store.UserStatusActive {
+		jsonError(w, http.StatusForbidden, "account_inactive")
+		return
+	}
+	if !isCanonicalRole(user.Role) {
+		jsonError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 

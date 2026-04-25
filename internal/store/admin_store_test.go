@@ -115,6 +115,9 @@ func TestUpsertUserInsertsNewUser(t *testing.T) {
 	if user.Provider != "google" {
 		t.Fatalf("expected provider 'google', got %q", user.Provider)
 	}
+	if user.Status != UserStatusActive {
+		t.Fatalf("expected status %q, got %q", UserStatusActive, user.Status)
+	}
 }
 
 func TestUpsertUserUpdatesNameAndPreservesRole(t *testing.T) {
@@ -140,13 +143,57 @@ func TestUpsertUserUpdatesNameAndPreservesRole(t *testing.T) {
 	if u2.Name != "Alice Renamed" {
 		t.Fatalf("expected name updated to 'Alice Renamed', got %q", u2.Name)
 	}
-	// Role must be preserved (not reset to viewer)
+	// Role/status must be preserved.
 	if u2.Role != "tech_lead" {
 		t.Fatalf("expected role 'tech_lead' preserved, got %q", u2.Role)
+	}
+	if u2.Status != UserStatusActive {
+		t.Fatalf("expected status %q preserved, got %q", UserStatusActive, u2.Status)
 	}
 	// Same ID
 	if u2.ID != u1.ID {
 		t.Fatalf("expected same user ID %d, got %d", u1.ID, u2.ID)
+	}
+}
+
+func TestCreatePendingUserDefaultsToPendingNAAndAuthLookup(t *testing.T) {
+	s := newTestStore(t)
+
+	created, err := s.CreatePendingUser("pending@example.com", "Pending User", "hash-123")
+	if err != nil {
+		t.Fatalf("CreatePendingUser: %v", err)
+	}
+	if created.Role != UserRoleNA {
+		t.Fatalf("role = %q, want %q", created.Role, UserRoleNA)
+	}
+	if created.Status != UserStatusPending {
+		t.Fatalf("status = %q, want %q", created.Status, UserStatusPending)
+	}
+
+	authUser, err := s.GetUserAuthByEmail("pending@example.com")
+	if err != nil {
+		t.Fatalf("GetUserAuthByEmail: %v", err)
+	}
+	if authUser.PasswordHash != "hash-123" {
+		t.Fatalf("PasswordHash = %q, want hash-123", authUser.PasswordHash)
+	}
+	if authUser.Role != UserRoleNA {
+		t.Fatalf("auth role = %q, want %q", authUser.Role, UserRoleNA)
+	}
+	if authUser.Status != UserStatusPending {
+		t.Fatalf("auth status = %q, want %q", authUser.Status, UserStatusPending)
+	}
+}
+
+func TestGetUserAuthByEmailNotFoundReturnsErrNotFound(t *testing.T) {
+	s := newTestStore(t)
+
+	_, err := s.GetUserAuthByEmail("ghost@example.com")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 
@@ -168,6 +215,9 @@ func TestGetUserByEmailFound(t *testing.T) {
 	}
 	if user.Name != "Bob" {
 		t.Fatalf("expected name 'Bob', got %q", user.Name)
+	}
+	if user.Status != UserStatusActive {
+		t.Fatalf("status = %q, want %q", user.Status, UserStatusActive)
 	}
 }
 
@@ -200,6 +250,9 @@ func TestGetUserByIDFound(t *testing.T) {
 	if user.Email != "carol@example.com" {
 		t.Fatalf("expected email 'carol@example.com', got %q", user.Email)
 	}
+	if user.Status != UserStatusActive {
+		t.Fatalf("status = %q, want %q", user.Status, UserStatusActive)
+	}
 }
 
 func TestGetUserByIDNotFoundReturnsErrNotFound(t *testing.T) {
@@ -230,6 +283,11 @@ func TestListUsersReturnsAllRows(t *testing.T) {
 	if len(users) != 3 {
 		t.Fatalf("expected 3 users, got %d", len(users))
 	}
+	for i, user := range users {
+		if user.Status != UserStatusActive {
+			t.Fatalf("users[%d].Status = %q, want %q", i, user.Status, UserStatusActive)
+		}
+	}
 }
 
 func TestListUsersEmptyReturnsEmptySlice(t *testing.T) {
@@ -257,6 +315,9 @@ func TestUpdateUserRoleSetsRole(t *testing.T) {
 	}
 	if updated.ID != created.ID {
 		t.Fatalf("expected ID %d, got %d", created.ID, updated.ID)
+	}
+	if updated.Status != UserStatusActive {
+		t.Fatalf("expected status %q, got %q", UserStatusActive, updated.Status)
 	}
 }
 
@@ -298,8 +359,11 @@ func TestUpsertUserSecondUserGetsViewerRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertUser second: %v", err)
 	}
-	if second.Role != "viewer" {
-		t.Fatalf("expected second user to get role 'viewer', got %q", second.Role)
+	if second.Role != UserRoleDeveloper {
+		t.Fatalf("expected second user to get role %q, got %q", UserRoleDeveloper, second.Role)
+	}
+	if second.Status != UserStatusActive {
+		t.Fatalf("expected second user to get status %q, got %q", UserStatusActive, second.Status)
 	}
 }
 
@@ -322,6 +386,84 @@ func TestUpsertUserFirstUserAdminOnRelogin(t *testing.T) {
 	}
 	if relogin.Role != "admin" {
 		t.Fatalf("re-login: expected admin role preserved, got %q", relogin.Role)
+	}
+	if relogin.Status != UserStatusActive {
+		t.Fatalf("re-login: expected status %q preserved, got %q", UserStatusActive, relogin.Status)
+	}
+
+	// sql.ErrNoRows is not used for users — ErrNotFound is canonical
+	_ = sql.ErrNoRows
+}
+
+func TestUpdateUserStatusRoleSetsCanonicalFields(t *testing.T) {
+	s := newTestStore(t)
+	created, err := s.CreatePendingUser("approval@example.com", "Approval", "hash-approval")
+	if err != nil {
+		t.Fatalf("CreatePendingUser: %v", err)
+	}
+
+	updated, err := s.UpdateUserStatusRole(created.ID, UserStatusDisabled, UserRoleTechLead)
+	if err != nil {
+		t.Fatalf("UpdateUserStatusRole: %v", err)
+	}
+	if updated.Status != UserStatusDisabled {
+		t.Fatalf("status = %q, want %q", updated.Status, UserStatusDisabled)
+	}
+	if updated.Role != UserRoleTechLead {
+		t.Fatalf("role = %q, want %q", updated.Role, UserRoleTechLead)
+	}
+
+	reloaded, err := s.GetUserByID(created.ID)
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+	if reloaded.Status != UserStatusDisabled || reloaded.Role != UserRoleTechLead {
+		t.Fatalf("reloaded user = %+v, want disabled tech_lead", reloaded)
+	}
+}
+
+func TestBootstrapAdminCreatesSingleActiveAdminWithoutOverwrite(t *testing.T) {
+	s := newTestStore(t)
+
+	bootstrapped, err := s.BootstrapAdmin("admin@example.com", "Bootstrap Admin", "hash-admin")
+	if err != nil {
+		t.Fatalf("BootstrapAdmin(first): %v", err)
+	}
+	if bootstrapped == nil {
+		t.Fatal("expected bootstrap result")
+	}
+	if bootstrapped.Role != UserRoleAdmin {
+		t.Fatalf("role = %q, want %q", bootstrapped.Role, UserRoleAdmin)
+	}
+	if bootstrapped.Status != UserStatusActive {
+		t.Fatalf("status = %q, want %q", bootstrapped.Status, UserStatusActive)
+	}
+
+	authUser, err := s.GetUserAuthByEmail("admin@example.com")
+	if err != nil {
+		t.Fatalf("GetUserAuthByEmail(first): %v", err)
+	}
+	if authUser.PasswordHash != "hash-admin" {
+		t.Fatalf("PasswordHash = %q, want hash-admin", authUser.PasswordHash)
+	}
+
+	again, err := s.BootstrapAdmin("admin@example.com", "Mutated Name", "replacement-hash")
+	if err != nil {
+		t.Fatalf("BootstrapAdmin(second): %v", err)
+	}
+	if again.ID != bootstrapped.ID {
+		t.Fatalf("second bootstrap id = %d, want %d", again.ID, bootstrapped.ID)
+	}
+	if again.Name != "Bootstrap Admin" {
+		t.Fatalf("second bootstrap name = %q, want original", again.Name)
+	}
+
+	reloaded, err := s.GetUserAuthByEmail("admin@example.com")
+	if err != nil {
+		t.Fatalf("GetUserAuthByEmail(second): %v", err)
+	}
+	if reloaded.PasswordHash != "hash-admin" {
+		t.Fatalf("reloaded PasswordHash = %q, want hash-admin", reloaded.PasswordHash)
 	}
 
 	// sql.ErrNoRows is not used for users — ErrNotFound is canonical

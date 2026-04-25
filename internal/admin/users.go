@@ -1,11 +1,6 @@
 package admin
 
 // users.go — User management API handlers.
-//
-// Routes (registered in Mount):
-//   GET /admin/api/users              → handleListUsers       (admin only)
-//   PUT /admin/api/users/{id}/role    → handleUpdateUserRole  (admin only)
-//   GET /admin/api/me                 → handleGetMe           (any authenticated user)
 
 import (
 	"encoding/json"
@@ -18,9 +13,16 @@ import (
 
 // validRoles is the set of allowed role values for UpdateUserRole.
 var validRoles = map[string]bool{
-	"admin":     true,
-	"tech_lead": true,
-	"viewer":    true,
+	store.UserRoleAdmin:     true,
+	store.UserRoleTechLead:  true,
+	store.UserRoleDeveloper: true,
+	store.UserRoleNA:        true,
+}
+
+var validStatuses = map[string]bool{
+	store.UserStatusPending:  true,
+	store.UserStatusActive:   true,
+	store.UserStatusDisabled: true,
 }
 
 // ─── handleListUsers ──────────────────────────────────────────────────────────
@@ -41,7 +43,8 @@ func (h *adminHandler) handleListUsers(w http.ResponseWriter, r *http.Request) {
 
 // updateUserRoleRequest is the JSON payload for PUT /admin/api/users/{id}/role.
 type updateUserRoleRequest struct {
-	Role string `json:"role"`
+	Role   string `json:"role"`
+	Status string `json:"status"`
 }
 
 // handleUpdateUserRole sets the role of the specified user.
@@ -60,6 +63,23 @@ func (h *adminHandler) handleUpdateUserRole(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	current, err := h.cfg.Store.GetUserByID(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			jsonError(w, http.StatusNotFound, "not_found")
+			return
+		}
+		jsonError(w, http.StatusInternalServerError, "failed to load user")
+		return
+	}
+
+	if req.Role == "" {
+		req.Role = current.Role
+	}
+	if req.Status == "" {
+		req.Status = current.Status
+	}
+
 	if !validRoles[req.Role] {
 		jsonResponse(w, http.StatusUnprocessableEntity, map[string]any{
 			"error":  "validation",
@@ -67,25 +87,33 @@ func (h *adminHandler) handleUpdateUserRole(w http.ResponseWriter, r *http.Reque
 		})
 		return
 	}
+	if !validStatuses[req.Status] {
+		jsonResponse(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":  "validation",
+			"fields": map[string]string{"status": "invalid_value"},
+		})
+		return
+	}
 
-	user, err := h.cfg.Store.UpdateUserRole(id, req.Role)
+	user, err := h.cfg.Store.UpdateUserStatusRole(id, req.Status, req.Role)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			jsonError(w, http.StatusNotFound, "not_found")
 			return
 		}
-		jsonError(w, http.StatusInternalServerError, "failed to update user role")
+		jsonError(w, http.StatusInternalServerError, "failed to update user")
 		return
 	}
 
 	jsonResponse(w, http.StatusOK, user)
 }
 
-// ─── handleGetMe ──────────────────────────────────────────────────────────────
-
-// handleGetMe returns the current authenticated user's profile from JWT claims.
-// GET /admin/api/me — any authenticated user (enforced by requireAuth in Mount).
 func (h *adminHandler) handleGetMe(w http.ResponseWriter, r *http.Request) {
+	if actor, ok := actorFromCtx(r.Context()); ok {
+		jsonResponse(w, http.StatusOK, actor)
+		return
+	}
+
 	claims, ok := claimsFromCtx(r.Context())
 	if !ok {
 		jsonError(w, http.StatusUnauthorized, "authentication required")
