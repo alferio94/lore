@@ -1,6 +1,7 @@
 package store
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -67,4 +68,38 @@ func TestUnsupportedBackendFeatureErrorMessage(t *testing.T) {
 	if !strings.Contains(err.Error(), "backend postgresql does not support search") {
 		t.Fatalf("unexpected error text: %q", err.Error())
 	}
+}
+
+func TestSkillReviewStateConstants(t *testing.T) {
+	if SkillReviewStateDraft != "draft" {
+		t.Fatalf("SkillReviewStateDraft = %q, want %q", SkillReviewStateDraft, "draft")
+	}
+	if SkillReviewStatePendingReview != "pending_review" {
+		t.Fatalf("SkillReviewStatePendingReview = %q, want %q", SkillReviewStatePendingReview, "pending_review")
+	}
+	if SkillReviewStateApproved != "approved" {
+		t.Fatalf("SkillReviewStateApproved = %q, want %q", SkillReviewStateApproved, "approved")
+	}
+	if SkillReviewStateRejected != "rejected" {
+		t.Fatalf("SkillReviewStateRejected = %q, want %q", SkillReviewStateRejected, "rejected")
+	}
+}
+
+func TestSkillStructHasReviewGovernanceFields(t *testing.T) {
+	typ := reflect.TypeOf(Skill{})
+	for _, field := range []string{"ReviewState", "CreatedBy", "ReviewedBy", "ReviewedAt", "ReviewNotes"} {
+		if _, ok := typ.FieldByName(field); !ok {
+			t.Fatalf("Skill struct missing %s field", field)
+		}
+	}
+}
+
+func TestStoreAndPostgresImplementAuditSkillReads(t *testing.T) {
+	type auditSkillReader interface {
+		ListSkillsForAudit(ListSkillsParams) ([]Skill, error)
+		GetSkillForAudit(name string) (*Skill, error)
+	}
+
+	var _ auditSkillReader = (*Store)(nil)
+	var _ auditSkillReader = (*PostgresStore)(nil)
 }

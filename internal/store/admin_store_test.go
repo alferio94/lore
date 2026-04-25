@@ -35,10 +35,10 @@ func TestDeleteSkillSoftDeletesSetsIsActiveFalse(t *testing.T) {
 		t.Fatalf("DeleteSkill: %v", err)
 	}
 
-	// The raw skill row must still exist with is_active=false
-	sk, err := s.GetSkill("my-skill")
+	// The raw skill row must still exist with is_active=false for audit reads.
+	sk, err := s.GetSkillForAudit("my-skill")
 	if err != nil {
-		t.Fatalf("GetSkill after delete: %v", err)
+		t.Fatalf("GetSkillForAudit after delete: %v", err)
 	}
 	if sk.IsActive {
 		t.Fatal("expected IsActive=false after soft-delete, got true")

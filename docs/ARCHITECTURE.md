@@ -129,3 +129,4 @@ The only in-repo integration package preserved here is `plugin/obsidian/`, becau
 - Keep project/workspace detection hints documented as Lore-owned runtime metadata, not as external configurator logic.
 - Keep identity decisions store-resolved at request time: JWTs are transport, current user role/status in `internal/store` is the authority.
 - Keep MCP role gates aligned to the tools that actually exist today; do not invent governance surfaces that the runtime does not expose yet.
+- Keep skill resolution semantics aligned across store, MCP, and admin surfaces: runtime-facing resolution reads (`ListSkills`, `GetSkill`, `skills://{name}`, `lore_list_skills`, `lore_get_skill`) resolve only skills where `review_state='approved'` and `is_active=true`; admin audit reads may inspect pending, rejected, draft, or inactive skills without making them runtime-resolvable.

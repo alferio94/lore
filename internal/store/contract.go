@@ -5,6 +5,16 @@ import (
 	"fmt"
 )
 
+type SkillResolutionReader interface {
+	ListSkills(params ListSkillsParams) ([]Skill, error)
+	GetSkill(name string) (*Skill, error)
+}
+
+type SkillAuditReader interface {
+	ListSkillsForAudit(params ListSkillsParams) ([]Skill, error)
+	GetSkillForAudit(name string) (*Skill, error)
+}
+
 // Contract is the backend-neutral store boundary consumed by the entrypoints.
 // SQLite remains the only implementation today, but callers should depend on
 // this contract instead of concrete persistence details.
@@ -43,8 +53,8 @@ type Contract interface {
 	CountObservationsForProject(name string) (int, error)
 	PruneProject(project string) (*PruneResult, error)
 	MergeProjects(sources []string, canonical string) (*MergeResult, error)
-	ListSkills(params ListSkillsParams) ([]Skill, error)
-	GetSkill(name string) (*Skill, error)
+	SkillResolutionReader
+	SkillAuditReader
 	CreateSkill(CreateSkillParams) (*Skill, error)
 	UpdateSkill(name string, params UpdateSkillParams) (*Skill, error)
 	DeleteSkill(name, changedBy string) error

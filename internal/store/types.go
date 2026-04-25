@@ -170,6 +170,11 @@ type Skill struct {
 	CompactRules string        `json:"compact_rules"`
 	Version      int           `json:"version"`
 	IsActive     bool          `json:"is_active"`
+	ReviewState  string        `json:"review_state"`
+	CreatedBy    string        `json:"created_by"`
+	ReviewedBy   string        `json:"reviewed_by"`
+	ReviewedAt   *string       `json:"reviewed_at,omitempty"`
+	ReviewNotes  string        `json:"review_notes"`
 	ChangedBy    string        `json:"changed_by"`
 	CreatedAt    string        `json:"created_at"`
 	UpdatedAt    string        `json:"updated_at"`
@@ -203,6 +208,11 @@ type UserAuth struct {
 }
 
 const (
+	SkillReviewStateDraft         = "draft"
+	SkillReviewStatePendingReview = "pending_review"
+	SkillReviewStateApproved      = "approved"
+	SkillReviewStateRejected      = "rejected"
+
 	UserRoleAdmin     = "admin"
 	UserRoleTechLead  = "tech_lead"
 	UserRoleDeveloper = "developer"
