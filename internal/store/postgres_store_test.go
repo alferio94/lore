@@ -14,6 +14,137 @@ import (
 	"github.com/lib/pq"
 )
 
+func TestPostgresStoreListSkillsReturnsOnlyApprovedActiveSkillsAndScansGovernanceMetadata(t *testing.T) {
+	var capturedQuery string
+	s := newStubPostgresStore(t, Config{Backend: BackendPostgreSQL}, func(query string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "FROM skills sk"):
+			capturedQuery = query
+			return &stubPostgresRows{
+				columns: []string{"id", "name", "display_name", "triggers", "content", "compact_rules", "version", "is_active", "review_state", "created_by", "reviewed_by", "reviewed_at", "review_notes", "changed_by", "created_at", "updated_at"},
+				values: [][]driver.Value{{
+					int64(7), "approved-skill", "Approved Skill", "trigger", "", "", int64(3), true,
+					SkillReviewStateApproved, "creator", "reviewer", "2026-04-24 11:00:00", "approved",
+					"reviewer", "2026-04-24 09:00:00", "2026-04-24 11:00:00",
+				}},
+			}, nil
+		case strings.Contains(query, "FROM skill_stacks") || strings.Contains(query, "FROM skill_categories"):
+			return &stubPostgresRows{columns: []string{"id", "name", "display_name"}}, nil
+		default:
+			return &stubPostgresRows{columns: []string{"id"}}, nil
+		}
+	})
+
+	skills, err := s.ListSkills(ListSkillsParams{})
+	if err != nil {
+		t.Fatalf("ListSkills(): %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("ListSkills() len = %d, want 1", len(skills))
+	}
+	if !strings.Contains(capturedQuery, "sk.review_state =") || !strings.Contains(capturedQuery, "sk.is_active = TRUE") {
+		t.Fatalf("ListSkills() query = %q, want approved+active filter", capturedQuery)
+	}
+	if skills[0].ReviewState != SkillReviewStateApproved {
+		t.Fatalf("ListSkills() review_state = %q, want %q", skills[0].ReviewState, SkillReviewStateApproved)
+	}
+	if skills[0].CreatedBy != "creator" || skills[0].ReviewedBy != "reviewer" {
+		t.Fatalf("ListSkills() governance metadata = %+v, want populated created/reviewed by", skills[0])
+	}
+	if skills[0].ReviewedAt == nil || *skills[0].ReviewedAt != "2026-04-24 11:00:00" {
+		t.Fatalf("ListSkills() reviewed_at = %v, want 2026-04-24 11:00:00", skills[0].ReviewedAt)
+	}
+}
+
+func TestPostgresStoreGetSkillReturnsErrNoRowsForNonResolvableSkill(t *testing.T) {
+	s := newStubPostgresStore(t, Config{Backend: BackendPostgreSQL}, func(query string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "SELECT id FROM skills WHERE name = $1"):
+			if strings.Contains(query, "review_state") {
+				return &stubPostgresRows{columns: []string{"id"}}, nil
+			}
+			return &stubPostgresRows{columns: []string{"id"}, values: [][]driver.Value{{int64(9)}}}, nil
+		case strings.Contains(query, "FROM skills"):
+			return &stubPostgresRows{
+				columns: []string{"id", "name", "display_name", "triggers", "content", "compact_rules", "version", "is_active", "review_state", "created_by", "reviewed_by", "reviewed_at", "review_notes", "changed_by", "created_at", "updated_at"},
+				values: [][]driver.Value{{
+					int64(9), "pending-skill", "Pending Skill", "trigger", "content", "rules", int64(1), true,
+					SkillReviewStatePendingReview, "creator", "reviewer", "2026-04-24 12:00:00", "needs review",
+					"reviewer", "2026-04-24 09:00:00", "2026-04-24 12:00:00",
+				}},
+			}, nil
+		case strings.Contains(query, "FROM skill_stacks") || strings.Contains(query, "FROM skill_categories"):
+			return &stubPostgresRows{columns: []string{"id", "name", "display_name"}}, nil
+		default:
+			return &stubPostgresRows{columns: []string{"id"}}, nil
+		}
+	})
+
+	_, err := s.GetSkill("pending-skill")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetSkill() error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestPostgresStoreAuditSkillReadsExposeGovernanceMetadataWithoutResolutionLeak(t *testing.T) {
+	var auditListQuery string
+	s := newStubPostgresStore(t, Config{Backend: BackendPostgreSQL}, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "SELECT id FROM skills WHERE name = $1"):
+			name, _ := args[0].Value.(string)
+			if name == "pending-skill" {
+				return &stubPostgresRows{columns: []string{"id"}, values: [][]driver.Value{{int64(5)}}}, nil
+			}
+			return &stubPostgresRows{columns: []string{"id"}}, nil
+		case strings.Contains(query, "FROM skills sk"):
+			auditListQuery = query
+			return &stubPostgresRows{
+				columns: []string{"id", "name", "display_name", "triggers", "content", "compact_rules", "version", "is_active", "review_state", "created_by", "reviewed_by", "reviewed_at", "review_notes", "changed_by", "created_at", "updated_at"},
+				values: [][]driver.Value{{
+					int64(5), "pending-skill", "Pending Skill", "trigger", "", "", int64(1), true,
+					SkillReviewStatePendingReview, "creator", "reviewer", "2026-04-24 11:00:00", "waiting for review",
+					"reviewer", "2026-04-24 09:00:00", "2026-04-24 11:00:00",
+				}},
+			}, nil
+		case strings.Contains(query, "FROM skills"):
+			return &stubPostgresRows{
+				columns: []string{"id", "name", "display_name", "triggers", "content", "compact_rules", "version", "is_active", "review_state", "created_by", "reviewed_by", "reviewed_at", "review_notes", "changed_by", "created_at", "updated_at"},
+				values: [][]driver.Value{{
+					int64(5), "pending-skill", "Pending Skill", "trigger", "content", "rules", int64(1), true,
+					SkillReviewStatePendingReview, "creator", "reviewer", "2026-04-24 11:00:00", "waiting for review",
+					"reviewer", "2026-04-24 09:00:00", "2026-04-24 11:00:00",
+				}},
+			}, nil
+		case strings.Contains(query, "FROM skill_stacks") || strings.Contains(query, "FROM skill_categories"):
+			return &stubPostgresRows{columns: []string{"id", "name", "display_name"}}, nil
+		default:
+			return &stubPostgresRows{columns: []string{"id"}}, nil
+		}
+	})
+
+	auditSkill, err := s.GetSkillForAudit("pending-skill")
+	if err != nil {
+		t.Fatalf("GetSkillForAudit(): %v", err)
+	}
+	if auditSkill.ReviewState != SkillReviewStatePendingReview {
+		t.Fatalf("GetSkillForAudit() review_state = %q, want %q", auditSkill.ReviewState, SkillReviewStatePendingReview)
+	}
+	if auditSkill.ReviewNotes != "waiting for review" {
+		t.Fatalf("GetSkillForAudit() review_notes = %q, want waiting for review", auditSkill.ReviewNotes)
+	}
+
+	auditSkills, err := s.ListSkillsForAudit(ListSkillsParams{})
+	if err != nil {
+		t.Fatalf("ListSkillsForAudit(): %v", err)
+	}
+	if len(auditSkills) != 1 || auditSkills[0].Name != "pending-skill" {
+		t.Fatalf("ListSkillsForAudit() = %+v, want pending-skill", auditSkills)
+	}
+	if strings.Contains(auditListQuery, "sk.review_state =") || strings.Contains(auditListQuery, "sk.is_active = TRUE") {
+		t.Fatalf("ListSkillsForAudit() query = %q, want audit reads without resolution filter", auditListQuery)
+	}
+}
+
 func TestPostgresStoreUnsupportedPromptMethodsReturnExplicitError(t *testing.T) {
 	s := &PostgresStore{cfg: Config{Backend: BackendPostgreSQL}}
 
@@ -86,8 +217,8 @@ func TestPostgresStoreListSkillsSanitizesSpecialCharacterSearchQuery(t *testing.
 	s := newStubPostgresStore(t, Config{Backend: BackendPostgreSQL}, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 		switch {
 		case strings.Contains(query, "ts_rank_cd"):
-			capturedQuery, _ = args[0].Value.(string)
-			return &stubPostgresRows{columns: []string{"id", "name", "display_name", "triggers", "content", "compact_rules", "version", "is_active", "changed_by", "created_at", "updated_at"}}, nil
+			capturedQuery, _ = args[len(args)-1].Value.(string)
+			return &stubPostgresRows{columns: []string{"id", "name", "display_name", "triggers", "content", "compact_rules", "version", "is_active", "review_state", "created_by", "reviewed_by", "reviewed_at", "review_notes", "changed_by", "created_at", "updated_at", "rank"}}, nil
 		case strings.Contains(query, "FROM skill_stacks") || strings.Contains(query, "FROM skill_categories"):
 			return &stubPostgresRows{columns: []string{"id", "name", "display_name"}}, nil
 		default:

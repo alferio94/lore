@@ -700,8 +700,48 @@ func normalizePostgresCatalogError(err error) error {
 	return err
 }
 
-func scanSkill(scanner interface{ Scan(dest ...any) error }, skill *Skill) error {
-	return scanner.Scan(
+func postgresSkillSelect(alias, contentExpr, compactRulesExpr string) string {
+	qualify := func(column string) string {
+		if alias == "" {
+			return column
+		}
+		return alias + "." + column
+	}
+
+	return fmt.Sprintf(`
+		SELECT %s, %s, %s, %s, %s, %s, %s, %s,
+		       %s, %s, %s, %s, %s,
+		       %s, %s, %s
+		FROM skills%s
+	`,
+		qualify("id"),
+		qualify("name"),
+		qualify("display_name"),
+		qualify("triggers"),
+		contentExpr,
+		compactRulesExpr,
+		qualify("version"),
+		qualify("is_active"),
+		qualify("review_state"),
+		qualify("created_by"),
+		qualify("reviewed_by"),
+		qualify("reviewed_at"),
+		qualify("review_notes"),
+		qualify("changed_by"),
+		qualify("created_at"),
+		qualify("updated_at"),
+		func() string {
+			if alias == "" {
+				return ""
+			}
+			return " " + alias
+		}(),
+	)
+}
+
+func scanPostgresSkill(scanner interface{ Scan(dest ...any) error }, skill *Skill) error {
+	var reviewedAt sql.NullString
+	if err := scanner.Scan(
 		&skill.ID,
 		&skill.Name,
 		&skill.DisplayName,
@@ -710,25 +750,71 @@ func scanSkill(scanner interface{ Scan(dest ...any) error }, skill *Skill) error
 		&skill.CompactRules,
 		&skill.Version,
 		&skill.IsActive,
+		&skill.ReviewState,
+		&skill.CreatedBy,
+		&skill.ReviewedBy,
+		&reviewedAt,
+		&skill.ReviewNotes,
 		&skill.ChangedBy,
 		&skill.CreatedAt,
 		&skill.UpdatedAt,
-	)
+	); err != nil {
+		return err
+	}
+	if reviewedAt.Valid {
+		skill.ReviewedAt = &reviewedAt.String
+	} else {
+		skill.ReviewedAt = nil
+	}
+	return nil
 }
 
-func (s *PostgresStore) getSkillByID(db queryer, id int64, metadataOnly bool) (*Skill, error) {
+func scanPostgresSkillWithRank(scanner interface{ Scan(dest ...any) error }, skill *Skill, rank *float64) error {
+	var reviewedAt sql.NullString
+	if err := scanner.Scan(
+		&skill.ID,
+		&skill.Name,
+		&skill.DisplayName,
+		&skill.Triggers,
+		&skill.Content,
+		&skill.CompactRules,
+		&skill.Version,
+		&skill.IsActive,
+		&skill.ReviewState,
+		&skill.CreatedBy,
+		&skill.ReviewedBy,
+		&reviewedAt,
+		&skill.ReviewNotes,
+		&skill.ChangedBy,
+		&skill.CreatedAt,
+		&skill.UpdatedAt,
+		rank,
+	); err != nil {
+		return err
+	}
+	if reviewedAt.Valid {
+		skill.ReviewedAt = &reviewedAt.String
+	} else {
+		skill.ReviewedAt = nil
+	}
+	return nil
+}
+
+func (s *PostgresStore) getSkillByID(db queryer, id int64, metadataOnly, resolutionOnly bool) (*Skill, error) {
 	contentExpr := "content"
 	rulesExpr := "compact_rules"
 	if metadataOnly {
 		contentExpr = `'' AS content`
 		rulesExpr = `'' AS compact_rules`
 	}
+	where := `WHERE id = $1`
+	args := []any{id}
+	if resolutionOnly {
+		args = append(args, SkillReviewStateApproved)
+		where += ` AND review_state = $2 AND is_active = TRUE`
+	}
 
-	rows, err := db.Query(fmt.Sprintf(`
-		SELECT id, name, display_name, triggers, %s, %s, version, is_active, changed_by, created_at, updated_at
-		FROM skills
-		WHERE id = $1
-	`, contentExpr, rulesExpr), id)
+	rows, err := db.Query(postgresSkillSelect("", contentExpr, rulesExpr)+" "+where, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -742,7 +828,7 @@ func (s *PostgresStore) getSkillByID(db queryer, id int64, metadataOnly bool) (*
 	}
 
 	var skill Skill
-	if err := scanSkill(rows, &skill); err != nil {
+	if err := scanPostgresSkill(rows, &skill); err != nil {
 		return nil, err
 	}
 	if err := rows.Close(); err != nil {
@@ -757,8 +843,15 @@ func (s *PostgresStore) getSkillByID(db queryer, id int64, metadataOnly bool) (*
 	return &skill, nil
 }
 
-func (s *PostgresStore) getSkillByName(db queryer, name string, metadataOnly bool) (*Skill, error) {
-	rows, err := db.Query(`SELECT id FROM skills WHERE name = $1`, name)
+func (s *PostgresStore) getSkillByName(db queryer, name string, metadataOnly, resolutionOnly bool) (*Skill, error) {
+	query := `SELECT id FROM skills WHERE name = $1`
+	args := []any{name}
+	if resolutionOnly {
+		args = append(args, SkillReviewStateApproved)
+		query += ` AND review_state = $2 AND is_active = TRUE`
+	}
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -776,7 +869,7 @@ func (s *PostgresStore) getSkillByName(db queryer, name string, metadataOnly boo
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	return s.getSkillByID(db, id, metadataOnly)
+	return s.getSkillByID(db, id, metadataOnly, resolutionOnly)
 }
 
 func insertSkillRelationshipsTx(tx *sql.Tx, skillID int64, stackIDs, categoryIDs []int64) error {
@@ -803,12 +896,10 @@ func writeSkillVersionTx(tx *sql.Tx, skillID int64, version int, content, compac
 
 func (s *PostgresStore) ListSkills(params ListSkillsParams) ([]Skill, error) {
 	args := make([]any, 0, 3)
-	baseQuery := `
-		SELECT sk.id, sk.name, sk.display_name, sk.triggers, '' AS content, '' AS compact_rules,
-		       sk.version, sk.is_active, sk.changed_by, sk.created_at, sk.updated_at
-		FROM skills sk
-	`
+	baseQuery := postgresSkillSelect("sk", `'' AS content`, `'' AS compact_rules`)
 	where := []string{"sk.is_active = TRUE"}
+	args = append(args, SkillReviewStateApproved)
+	where = append(where, fmt.Sprintf("sk.review_state = $%d", len(args)))
 	orderBy := "ORDER BY sk.name ASC"
 
 	if params.Query != "" {
@@ -818,13 +909,15 @@ func (s *PostgresStore) ListSkills(params ListSkillsParams) ([]Skill, error) {
 		}
 		vector := postgresSkillSearchVector("sk")
 		args = append(args, searchQuery)
+		queryPlaceholder := fmt.Sprintf("$%d", len(args))
 		baseQuery = fmt.Sprintf(`
 			SELECT sk.id, sk.name, sk.display_name, sk.triggers, '' AS content, '' AS compact_rules,
-			       sk.version, sk.is_active, sk.changed_by, sk.created_at, sk.updated_at,
-			       ts_rank_cd(%s, websearch_to_tsquery('simple', $1)) AS rank
+			       sk.version, sk.is_active, sk.review_state, sk.created_by, sk.reviewed_by, sk.reviewed_at, sk.review_notes,
+			       sk.changed_by, sk.created_at, sk.updated_at,
+			       ts_rank_cd(%s, websearch_to_tsquery('simple', %s)) AS rank
 			FROM skills sk
-		`, vector)
-		where = append(where, fmt.Sprintf(`%s @@ websearch_to_tsquery('simple', $1)`, vector))
+		`, vector, queryPlaceholder)
+		where = append(where, fmt.Sprintf(`%s @@ websearch_to_tsquery('simple', %s)`, vector, queryPlaceholder))
 		orderBy = "ORDER BY rank DESC, sk.name ASC"
 	}
 
@@ -848,11 +941,11 @@ func (s *PostgresStore) ListSkills(params ListSkillsParams) ([]Skill, error) {
 		var skill Skill
 		if params.Query != "" {
 			var rank float64
-			if err := rows.Scan(&skill.ID, &skill.Name, &skill.DisplayName, &skill.Triggers, &skill.Content, &skill.CompactRules, &skill.Version, &skill.IsActive, &skill.ChangedBy, &skill.CreatedAt, &skill.UpdatedAt, &rank); err != nil {
+			if err := scanPostgresSkillWithRank(rows, &skill, &rank); err != nil {
 				return nil, err
 			}
 		} else {
-			if err := scanSkill(rows, &skill); err != nil {
+			if err := scanPostgresSkill(rows, &skill); err != nil {
 				return nil, err
 			}
 		}
@@ -871,7 +964,78 @@ func (s *PostgresStore) ListSkills(params ListSkillsParams) ([]Skill, error) {
 }
 
 func (s *PostgresStore) GetSkill(name string) (*Skill, error) {
-	return s.getSkillByName(s.db, name, false)
+	return s.getSkillByName(s.db, name, false, true)
+}
+
+func (s *PostgresStore) ListSkillsForAudit(params ListSkillsParams) ([]Skill, error) {
+	args := make([]any, 0, 2)
+	baseQuery := postgresSkillSelect("sk", `'' AS content`, `'' AS compact_rules`)
+	where := []string{"1 = 1"}
+	orderBy := "ORDER BY sk.name ASC"
+
+	if params.Query != "" {
+		searchQuery := postgresSkillSearchQuery(params.Query)
+		if searchQuery == "" {
+			return []Skill{}, nil
+		}
+		vector := postgresSkillSearchVector("sk")
+		args = append(args, searchQuery)
+		queryPlaceholder := fmt.Sprintf("$%d", len(args))
+		baseQuery = fmt.Sprintf(`
+			SELECT sk.id, sk.name, sk.display_name, sk.triggers, '' AS content, '' AS compact_rules,
+			       sk.version, sk.is_active, sk.review_state, sk.created_by, sk.reviewed_by, sk.reviewed_at, sk.review_notes,
+			       sk.changed_by, sk.created_at, sk.updated_at,
+			       ts_rank_cd(%s, websearch_to_tsquery('simple', %s)) AS rank
+			FROM skills sk
+		`, vector, queryPlaceholder)
+		where = append(where, fmt.Sprintf(`%s @@ websearch_to_tsquery('simple', %s)`, vector, queryPlaceholder))
+		orderBy = "ORDER BY rank DESC, sk.name ASC"
+	}
+
+	if params.StackID != nil {
+		args = append(args, *params.StackID)
+		where = append(where, fmt.Sprintf("sk.id IN (SELECT skill_id FROM skill_stacks WHERE stack_id = $%d)", len(args)))
+	}
+	if params.CategoryID != nil {
+		args = append(args, *params.CategoryID)
+		where = append(where, fmt.Sprintf("sk.id IN (SELECT skill_id FROM skill_categories WHERE category_id = $%d)", len(args)))
+	}
+
+	rows, err := s.db.Query(baseQuery+" WHERE "+strings.Join(where, " AND ")+" "+orderBy, args...)
+	if err != nil {
+		return nil, normalizePostgresCatalogError(err)
+	}
+	defer rows.Close()
+
+	results := make([]Skill, 0)
+	for rows.Next() {
+		var skill Skill
+		if params.Query != "" {
+			var rank float64
+			if err := scanPostgresSkillWithRank(rows, &skill, &rank); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := scanPostgresSkill(rows, &skill); err != nil {
+				return nil, err
+			}
+		}
+		stacks, categories, err := s.loadSkillRelationships(s.db, skill.ID)
+		if err != nil {
+			return nil, err
+		}
+		skill.Stacks = stacks
+		skill.Categories = categories
+		results = append(results, skill)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (s *PostgresStore) GetSkillForAudit(name string) (*Skill, error) {
+	return s.getSkillByName(s.db, name, false, false)
 }
 
 func (s *PostgresStore) CreateSkill(params CreateSkillParams) (*Skill, error) {
@@ -884,10 +1048,13 @@ func (s *PostgresStore) CreateSkill(params CreateSkillParams) (*Skill, error) {
 	err := s.withTx(func(tx *sql.Tx) error {
 		var skillID int64
 		if err := tx.QueryRow(`
-			INSERT INTO skills (name, display_name, triggers, content, compact_rules, version, is_active, changed_by)
-			VALUES ($1, $2, $3, $4, $5, 1, TRUE, $6)
+			INSERT INTO skills (
+				name, display_name, triggers, content, compact_rules, version, is_active,
+				review_state, created_by, reviewed_by, reviewed_at, review_notes, changed_by
+			)
+			VALUES ($1, $2, $3, $4, $5, 1, TRUE, $6, $7, $8, to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS'), '', $9)
 			RETURNING id
-		`, params.Name, params.DisplayName, params.Triggers, params.Content, params.CompactRules, changedBy).Scan(&skillID); err != nil {
+		`, params.Name, params.DisplayName, params.Triggers, params.Content, params.CompactRules, SkillReviewStateApproved, changedBy, changedBy, changedBy).Scan(&skillID); err != nil {
 			return normalizePostgresCatalogError(err)
 		}
 
@@ -898,7 +1065,7 @@ func (s *PostgresStore) CreateSkill(params CreateSkillParams) (*Skill, error) {
 			return normalizePostgresCatalogError(err)
 		}
 
-		skill, err := s.getSkillByID(tx, skillID, false)
+		skill, err := s.getSkillByID(tx, skillID, false, false)
 		if err != nil {
 			return err
 		}
@@ -982,7 +1149,7 @@ func (s *PostgresStore) UpdateSkill(name string, params UpdateSkillParams) (*Ski
 			return normalizePostgresCatalogError(err)
 		}
 
-		skill, err := s.getSkillByID(tx, skillID, false)
+		skill, err := s.getSkillByID(tx, skillID, false, false)
 		if err != nil {
 			return err
 		}

@@ -21,10 +21,10 @@ import (
 
 // ─── handleListSkills ─────────────────────────────────────────────────────────
 
-// handleListSkills returns all active skills as a JSON array.
+// handleListSkills returns all skills visible to admin audit reads as a JSON array.
 // Requires: viewer or higher role (enforced by requireRole in Mount).
 func (h *adminHandler) handleListSkills(w http.ResponseWriter, r *http.Request) {
-	skills, err := h.cfg.Store.ListSkills(store.ListSkillsParams{})
+	skills, err := h.cfg.Store.ListSkillsForAudit(store.ListSkillsParams{})
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "internal_error")
 		return
@@ -40,14 +40,14 @@ func (h *adminHandler) handleListSkills(w http.ResponseWriter, r *http.Request) 
 
 // ─── handleGetSkill ───────────────────────────────────────────────────────────
 
-// handleGetSkill returns a single skill by name.
-// Returns 404 when no active or inactive skill matches — GetSkill returns
+// handleGetSkill returns a single skill by name for admin audit visibility.
+// Returns 404 when no audited skill matches — GetSkillForAudit returns
 // sql.ErrNoRows for truly absent rows.
 // Requires: viewer or higher role (enforced by requireRole in Mount).
 func (h *adminHandler) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
-	skill, err := h.cfg.Store.GetSkill(name)
+	skill, err := h.cfg.Store.GetSkillForAudit(name)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			jsonError(w, http.StatusNotFound, "not_found")

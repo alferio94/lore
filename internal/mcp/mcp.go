@@ -152,15 +152,15 @@ CORE TOOLS (always available — use without ToolSearch):
   lore_save_prompt — save user prompt for context
 
 SKILLS TOOLS (discover and read team coding skills):
-  lore_list_skills — list available skills filtered by stack or category (returns metadata, no content)
-  lore_get_skill — get full skill content by name (returns markdown content + metadata)
+  lore_list_skills — list approved+active skills filtered by stack or category (returns metadata, no content)
+  lore_get_skill — get full content for an approved+active skill by name (returns markdown content + metadata)
 
 DEFERRED TOOLS (use ToolSearch when needed):
   lore_update, lore_suggest_topic_key, lore_session_start, lore_session_end,
   lore_stats, lore_delete, lore_timeline, lore_capture_passive, lore_merge_projects
 
 SKILLS RESOURCES (access skills as MCP resources):
-  skills://{name} — read a skill as a markdown resource
+  skills://{name} — read an approved+active skill as a markdown resource
 
 PROACTIVE SAVE RULE: Call lore_save immediately after ANY decision, bug fix, discovery, or convention — not just when asked.`
 
@@ -785,9 +785,9 @@ Duplicates are automatically detected and skipped — safe to call multiple time
 
 	// ─── lore_list_skills (profile: agent) ───────────────────────────────
 	if shouldRegister("lore_list_skills", allowlist) {
-		srv.AddTool(
-			mcp.NewTool("lore_list_skills",
-				mcp.WithDescription("List available team coding skills. Returns metadata (name, display_name, stacks, categories, triggers, version) without content. Filter by stack_id or category_id (integer IDs from catalog), or use query for full-text search."),
+			srv.AddTool(
+				mcp.NewTool("lore_list_skills",
+					mcp.WithDescription("List available approved+active team coding skills. Returns metadata (name, display_name, stacks, categories, triggers, version) without content. Filter by stack_id or category_id (integer IDs from catalog), or use query for full-text search."),
 				mcp.WithTitleAnnotation("List Skills"),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithDestructiveHintAnnotation(false),
@@ -809,9 +809,9 @@ Duplicates are automatically detected and skipped — safe to call multiple time
 
 	// ─── lore_get_skill (profile: agent) ─────────────────────────────────
 	if shouldRegister("lore_get_skill", allowlist) {
-		srv.AddTool(
-			mcp.NewTool("lore_get_skill",
-				mcp.WithDescription("Get the full content of a skill by name. Returns complete markdown content plus metadata (display_name, stacks, categories, triggers, version)."),
+			srv.AddTool(
+				mcp.NewTool("lore_get_skill",
+					mcp.WithDescription("Get the full content of an approved+active skill by name. Returns complete markdown content plus metadata (display_name, stacks, categories, triggers, version)."),
 				mcp.WithTitleAnnotation("Get Skill"),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithDestructiveHintAnnotation(false),
@@ -1415,7 +1415,7 @@ func handleListSkills(s store.Contract) server.ToolHandlerFunc {
 			return mcp.NewToolResultText("[]"), nil
 		}
 
-		// Return metadata only — strip content field from each skill
+		// Return metadata only for resolution-visible skills — strip content field from each skill.
 		type skillMeta struct {
 			ID          int64               `json:"id"`
 			Name        string              `json:"name"`
@@ -1481,7 +1481,7 @@ func registerResources(srv *server.MCPServer, s store.Contract) {
 		mcp.NewResourceTemplate(
 			"skills://{name}",
 			"Skill",
-			mcp.WithTemplateDescription("Read a team coding skill by name. Returns the full markdown content of the skill."),
+			mcp.WithTemplateDescription("Read an approved+active team coding skill by name. Returns the full markdown content of the skill."),
 			mcp.WithTemplateMIMEType("text/markdown"),
 		),
 		handleSkillResource(s),
@@ -1492,7 +1492,7 @@ func handleSkillResource(s store.Contract) server.ResourceTemplateHandlerFunc {
 	return func(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 		uri := req.Params.URI
 
-		// Extract name from skills://{name}
+		// Extract name from skills://{name}; resolution reads only expose approved+active skills.
 		name := strings.TrimPrefix(uri, "skills://")
 		if name == "" || name == uri {
 			return nil, fmt.Errorf("invalid skills URI: %q", uri)

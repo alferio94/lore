@@ -342,6 +342,242 @@ func TestPostgresStoreUnsupportedPromptSliceIntegration(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreSkillGovernanceIntegration(t *testing.T) {
+	s := newPostgresTestStore(t)
+
+	for _, seed := range []struct {
+		name      string
+		display   string
+		content   string
+		changedBy string
+	}{
+		{name: "approved-skill", display: "Approved Skill", content: "approved content", changedBy: "creator"},
+		{name: "pending-skill", display: "Pending Skill", content: "pending content", changedBy: "creator"},
+		{name: "rejected-skill", display: "Rejected Skill", content: "rejected content", changedBy: "creator"},
+		{name: "inactive-skill", display: "Inactive Skill", content: "inactive content", changedBy: "creator"},
+	} {
+		if _, err := s.CreateSkill(CreateSkillParams{
+			Name:        seed.name,
+			DisplayName: seed.display,
+			Content:     seed.content,
+			ChangedBy:   seed.changedBy,
+		}); err != nil {
+			t.Fatalf("CreateSkill(%s): %v", seed.name, err)
+		}
+	}
+
+	if _, err := s.db.Exec(`
+		UPDATE skills
+		SET review_state = $1, created_by = $2, reviewed_by = $3, reviewed_at = $4, review_notes = $5
+		WHERE name = $6
+	`, SkillReviewStatePendingReview, "creator", "reviewer", "2026-04-24 11:00:00", "waiting for review", "pending-skill"); err != nil {
+		t.Fatalf("mark pending-skill pending_review: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		UPDATE skills
+		SET review_state = $1, reviewed_by = $2, reviewed_at = $3, review_notes = $4
+		WHERE name = $5
+	`, SkillReviewStateRejected, "reviewer", "2026-04-24 12:00:00", "rejected", "rejected-skill"); err != nil {
+		t.Fatalf("mark rejected-skill rejected: %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE skills SET is_active = FALSE WHERE name = $1`, "inactive-skill"); err != nil {
+		t.Fatalf("deactivate inactive-skill: %v", err)
+	}
+
+	resolved, err := s.ListSkills(ListSkillsParams{})
+	if err != nil {
+		t.Fatalf("ListSkills(): %v", err)
+	}
+	if len(resolved) != 1 || resolved[0].Name != "approved-skill" {
+		t.Fatalf("ListSkills() = %+v, want only approved-skill", resolved)
+	}
+	if resolved[0].ReviewState != SkillReviewStateApproved || !resolved[0].IsActive {
+		t.Fatalf("ListSkills() returned non-resolvable skill metadata: %+v", resolved[0])
+	}
+
+	if _, err := s.GetSkill("pending-skill"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetSkill(pending-skill) error = %v, want sql.ErrNoRows", err)
+	}
+
+	auditSkill, err := s.GetSkillForAudit("pending-skill")
+	if err != nil {
+		t.Fatalf("GetSkillForAudit(): %v", err)
+	}
+	if auditSkill.ReviewState != SkillReviewStatePendingReview {
+		t.Fatalf("GetSkillForAudit() review_state = %q, want %q", auditSkill.ReviewState, SkillReviewStatePendingReview)
+	}
+	if auditSkill.ReviewedAt == nil || *auditSkill.ReviewedAt != "2026-04-24 11:00:00" {
+		t.Fatalf("GetSkillForAudit() reviewed_at = %v, want 2026-04-24 11:00:00", auditSkill.ReviewedAt)
+	}
+	if auditSkill.ReviewNotes != "waiting for review" {
+		t.Fatalf("GetSkillForAudit() review_notes = %q, want waiting for review", auditSkill.ReviewNotes)
+	}
+
+	auditSkills, err := s.ListSkillsForAudit(ListSkillsParams{})
+	if err != nil {
+		t.Fatalf("ListSkillsForAudit(): %v", err)
+	}
+	if len(auditSkills) != 4 {
+		t.Fatalf("ListSkillsForAudit() len = %d, want 4", len(auditSkills))
+	}
+}
+
+func TestSkillGovernanceQueryParityAcrossBackends(t *testing.T) {
+	sqlite := newTestStore(t)
+	postgres := newPostgresTestStore(t)
+
+	seedSQLite := func(t *testing.T, s *Store) {
+		t.Helper()
+		for _, seed := range []struct {
+			name      string
+			display   string
+			content   string
+			changedBy string
+		}{
+			{name: "approved-skill", display: "Approved Skill", content: "approved content", changedBy: "creator"},
+			{name: "pending-skill", display: "Pending Skill", content: "pending content", changedBy: "creator"},
+			{name: "rejected-skill", display: "Rejected Skill", content: "rejected content", changedBy: "creator"},
+			{name: "inactive-skill", display: "Inactive Skill", content: "inactive content", changedBy: "creator"},
+		} {
+			if _, err := s.CreateSkill(CreateSkillParams{
+				Name:        seed.name,
+				DisplayName: seed.display,
+				Content:     seed.content,
+				ChangedBy:   seed.changedBy,
+			}); err != nil {
+				t.Fatalf("sqlite CreateSkill(%s): %v", seed.name, err)
+			}
+		}
+
+		if _, err := s.db.Exec(`
+			UPDATE skills
+			SET review_state = ?, created_by = ?, reviewed_by = ?, reviewed_at = ?, review_notes = ?
+			WHERE name = ?
+		`, SkillReviewStatePendingReview, "creator", "reviewer", "2026-04-24 11:00:00", "waiting for review", "pending-skill"); err != nil {
+			t.Fatalf("sqlite mark pending-skill pending_review: %v", err)
+		}
+		if _, err := s.db.Exec(`
+			UPDATE skills
+			SET review_state = ?, reviewed_by = ?, reviewed_at = ?, review_notes = ?
+			WHERE name = ?
+		`, SkillReviewStateRejected, "reviewer", "2026-04-24 12:00:00", "rejected", "rejected-skill"); err != nil {
+			t.Fatalf("sqlite mark rejected-skill rejected: %v", err)
+		}
+		if _, err := s.db.Exec(`UPDATE skills SET is_active = 0 WHERE name = ?`, "inactive-skill"); err != nil {
+			t.Fatalf("sqlite deactivate inactive-skill: %v", err)
+		}
+	}
+
+	seedPostgres := func(t *testing.T, s *PostgresStore) {
+		t.Helper()
+		for _, seed := range []struct {
+			name      string
+			display   string
+			content   string
+			changedBy string
+		}{
+			{name: "approved-skill", display: "Approved Skill", content: "approved content", changedBy: "creator"},
+			{name: "pending-skill", display: "Pending Skill", content: "pending content", changedBy: "creator"},
+			{name: "rejected-skill", display: "Rejected Skill", content: "rejected content", changedBy: "creator"},
+			{name: "inactive-skill", display: "Inactive Skill", content: "inactive content", changedBy: "creator"},
+		} {
+			if _, err := s.CreateSkill(CreateSkillParams{
+				Name:        seed.name,
+				DisplayName: seed.display,
+				Content:     seed.content,
+				ChangedBy:   seed.changedBy,
+			}); err != nil {
+				t.Fatalf("postgres CreateSkill(%s): %v", seed.name, err)
+			}
+		}
+
+		if _, err := s.db.Exec(`
+			UPDATE skills
+			SET review_state = $1, created_by = $2, reviewed_by = $3, reviewed_at = $4, review_notes = $5
+			WHERE name = $6
+		`, SkillReviewStatePendingReview, "creator", "reviewer", "2026-04-24 11:00:00", "waiting for review", "pending-skill"); err != nil {
+			t.Fatalf("postgres mark pending-skill pending_review: %v", err)
+		}
+		if _, err := s.db.Exec(`
+			UPDATE skills
+			SET review_state = $1, reviewed_by = $2, reviewed_at = $3, review_notes = $4
+			WHERE name = $5
+		`, SkillReviewStateRejected, "reviewer", "2026-04-24 12:00:00", "rejected", "rejected-skill"); err != nil {
+			t.Fatalf("postgres mark rejected-skill rejected: %v", err)
+		}
+		if _, err := s.db.Exec(`UPDATE skills SET is_active = FALSE WHERE name = $1`, "inactive-skill"); err != nil {
+			t.Fatalf("postgres deactivate inactive-skill: %v", err)
+		}
+	}
+
+	seedSQLite(t, sqlite)
+	seedPostgres(t, postgres)
+
+	sqliteResolved, err := sqlite.ListSkills(ListSkillsParams{})
+	if err != nil {
+		t.Fatalf("sqlite ListSkills(): %v", err)
+	}
+	postgresResolved, err := postgres.ListSkills(ListSkillsParams{})
+	if err != nil {
+		t.Fatalf("postgres ListSkills(): %v", err)
+	}
+
+	if len(sqliteResolved) != 1 || len(postgresResolved) != 1 {
+		t.Fatalf("expected one resolvable skill per backend, got sqlite=%d postgres=%d", len(sqliteResolved), len(postgresResolved))
+	}
+	if sqliteResolved[0].Name != postgresResolved[0].Name || sqliteResolved[0].ReviewState != postgresResolved[0].ReviewState || sqliteResolved[0].IsActive != postgresResolved[0].IsActive {
+		t.Fatalf("resolved parity mismatch: sqlite=%+v postgres=%+v", sqliteResolved[0], postgresResolved[0])
+	}
+
+	for _, name := range []string{"pending-skill", "rejected-skill", "inactive-skill"} {
+		if _, err := sqlite.GetSkill(name); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("sqlite GetSkill(%s) error = %v, want sql.ErrNoRows", name, err)
+		}
+		if _, err := postgres.GetSkill(name); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("postgres GetSkill(%s) error = %v, want sql.ErrNoRows", name, err)
+		}
+	}
+
+	sqliteAudit, err := sqlite.GetSkillForAudit("pending-skill")
+	if err != nil {
+		t.Fatalf("sqlite GetSkillForAudit(): %v", err)
+	}
+	postgresAudit, err := postgres.GetSkillForAudit("pending-skill")
+	if err != nil {
+		t.Fatalf("postgres GetSkillForAudit(): %v", err)
+	}
+	if sqliteAudit.ReviewState != postgresAudit.ReviewState || sqliteAudit.ReviewNotes != postgresAudit.ReviewNotes || sqliteAudit.CreatedBy != postgresAudit.CreatedBy || sqliteAudit.ReviewedBy != postgresAudit.ReviewedBy {
+		t.Fatalf("pending audit parity mismatch: sqlite=%+v postgres=%+v", sqliteAudit, postgresAudit)
+	}
+	if sqliteAudit.ReviewedAt == nil || postgresAudit.ReviewedAt == nil || *sqliteAudit.ReviewedAt != *postgresAudit.ReviewedAt {
+		t.Fatalf("pending reviewed_at parity mismatch: sqlite=%v postgres=%v", sqliteAudit.ReviewedAt, postgresAudit.ReviewedAt)
+	}
+
+	sqliteAuditList, err := sqlite.ListSkillsForAudit(ListSkillsParams{})
+	if err != nil {
+		t.Fatalf("sqlite ListSkillsForAudit(): %v", err)
+	}
+	postgresAuditList, err := postgres.ListSkillsForAudit(ListSkillsParams{})
+	if err != nil {
+		t.Fatalf("postgres ListSkillsForAudit(): %v", err)
+	}
+	if len(sqliteAuditList) != len(postgresAuditList) {
+		t.Fatalf("audit list parity mismatch: sqlite=%d postgres=%d", len(sqliteAuditList), len(postgresAuditList))
+	}
+
+	sqliteStates := map[string]string{}
+	for _, skill := range sqliteAuditList {
+		sqliteStates[skill.Name] = fmt.Sprintf("%s/%t", skill.ReviewState, skill.IsActive)
+	}
+	postgresStates := map[string]string{}
+	for _, skill := range postgresAuditList {
+		postgresStates[skill.Name] = fmt.Sprintf("%s/%t", skill.ReviewState, skill.IsActive)
+	}
+	if fmt.Sprint(sqliteStates) != fmt.Sprint(postgresStates) {
+		t.Fatalf("audit state parity mismatch: sqlite=%v postgres=%v", sqliteStates, postgresStates)
+	}
+}
+
 func TestPostgresStoreSearchParityIntegration(t *testing.T) {
 	s := newPostgresTestStore(t)
 

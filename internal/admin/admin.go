@@ -19,8 +19,8 @@ import (
 )
 
 type AdminStore interface {
-	ListSkills(params store.ListSkillsParams) ([]store.Skill, error)
-	GetSkill(name string) (*store.Skill, error)
+	ListSkillsForAudit(params store.ListSkillsParams) ([]store.Skill, error)
+	GetSkillForAudit(name string) (*store.Skill, error)
 	CreateSkill(params store.CreateSkillParams) (*store.Skill, error)
 	UpdateSkill(name string, params store.UpdateSkillParams) (*store.Skill, error)
 	DeleteSkill(name, changedBy string) error

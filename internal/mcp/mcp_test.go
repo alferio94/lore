@@ -2188,6 +2188,14 @@ func seedSkill(t *testing.T, s store.Contract, name, displayName, stack, categor
 	_ = category
 }
 
+func seedInactiveSkill(t *testing.T, s store.Contract, name, displayName, stack, category, triggers, content string) {
+	t.Helper()
+	seedSkill(t, s, name, displayName, stack, category, triggers, content)
+	if err := s.DeleteSkill(name, "reviewer@example.com"); err != nil {
+		t.Fatalf("DeleteSkill(%q): %v", name, err)
+	}
+}
+
 // seedSkillWithCatalog creates a skill with actual stack/category catalog relationships.
 func seedSkillWithCatalog(t *testing.T, s store.Contract, name, displayName string, stackIDs, categoryIDs []int64, triggers, content string) {
 	t.Helper()
@@ -2233,6 +2241,30 @@ func TestHandleListSkillsNoParams(t *testing.T) {
 	// Content field must NOT appear
 	if strings.Contains(text, "Auth Guard content") || strings.Contains(text, "JWT Middleware content") {
 		t.Errorf("content field should NOT appear in list results, got %q", text)
+	}
+}
+
+func TestHandleListSkillsExcludesInactiveSkills(t *testing.T) {
+	s := newMCPTestStore(t)
+	seedSkill(t, s, "approved-skill", "Approved Skill", "", "", "When approved", "# approved")
+	seedInactiveSkill(t, s, "inactive-skill", "Inactive Skill", "", "", "When inactive", "# inactive")
+
+	h := handleListSkills(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", callResultText(t, res))
+	}
+
+	text := callResultText(t, res)
+	if !strings.Contains(text, "approved-skill") {
+		t.Fatalf("expected approved skill in output, got %q", text)
+	}
+	if strings.Contains(text, "inactive-skill") {
+		t.Fatalf("inactive skill should not resolve in lore_list_skills, got %q", text)
 	}
 }
 
@@ -2719,6 +2751,43 @@ func TestHandleSkillResourceNotFound(t *testing.T) {
 	_, err := h(context.Background(), req)
 	if err == nil {
 		t.Fatal("expected error for non-existent resource, got nil")
+	}
+}
+
+func TestHandleGetSkillReturnsNotFoundForInactiveSkill(t *testing.T) {
+	s := newMCPTestStore(t)
+	seedInactiveSkill(t, s, "inactive-direct", "Inactive Direct", "", "", "When inactive", "# inactive direct")
+
+	h := handleGetSkill(s)
+	req := mcppkg.CallToolRequest{Params: mcppkg.CallToolParams{Arguments: map[string]any{
+		"name": "inactive-direct",
+	}}}
+	res, err := h(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected tool error for inactive skill")
+	}
+	if got := callResultText(t, res); !strings.Contains(got, `Skill "inactive-direct" not found`) {
+		t.Fatalf("unexpected error text: %q", got)
+	}
+}
+
+func TestHandleSkillResourceReturnsNotFoundForInactiveSkill(t *testing.T) {
+	s := newMCPTestStore(t)
+	seedInactiveSkill(t, s, "inactive-resource", "Inactive Resource", "", "", "When inactive", "# inactive resource")
+
+	h := handleSkillResource(s)
+	req := mcppkg.ReadResourceRequest{Params: mcppkg.ReadResourceParams{
+		URI: "skills://inactive-resource",
+	}}
+	_, err := h(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for inactive resource, got nil")
+	}
+	if !strings.Contains(err.Error(), `skill "inactive-resource" not found`) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

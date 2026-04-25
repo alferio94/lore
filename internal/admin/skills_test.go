@@ -81,6 +81,19 @@ func seedSkill(t *testing.T, s *store.Store, name string) *store.Skill {
 	return sk
 }
 
+func seedInactiveSkill(t *testing.T, s *store.Store, name string) *store.Skill {
+	t.Helper()
+	seedSkill(t, s, name)
+	if err := s.DeleteSkill(name, "reviewer@example.com"); err != nil {
+		t.Fatalf("DeleteSkill %q: %v", name, err)
+	}
+	auditSkill, err := s.GetSkillForAudit(name)
+	if err != nil {
+		t.Fatalf("GetSkillForAudit %q: %v", name, err)
+	}
+	return auditSkill
+}
+
 // ─── Task 4.1 RED: handleListSkills + handleGetSkill ─────────────────────────
 
 func TestHandleListSkillsReturns200WithArray(t *testing.T) {
@@ -148,6 +161,48 @@ func TestHandleListSkillsReturnsEmptyArrayWhenNoSkills(t *testing.T) {
 	}
 }
 
+func TestHandleListSkillsReturnsAuditVisibleInactiveSkills(t *testing.T) {
+	s := newTestStoreForAdmin(t)
+	seedSkill(t, s, "approved-skill")
+	inactive := seedInactiveSkill(t, s, "inactive-skill")
+
+	cfg := makeSkillsConfig(s)
+	h := &adminHandler{cfg: cfg}
+
+	req := newTestRequest(t, "GET", "/admin/api/skills", nil)
+	req.AddCookie(makeSkillsCookie(t, cfg, "viewer"))
+	w := newTestResponseRecorder()
+
+	authed := requireRole(cfg.JWTSecret, "viewer", h.handleListSkills)
+	authed(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+
+	var skills []store.Skill
+	if err := json.NewDecoder(w.Body).Decode(&skills); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(skills) != 2 {
+		t.Fatalf("skills count: got %d, want 2", len(skills))
+	}
+
+	var foundInactive *store.Skill
+	for i := range skills {
+		if skills[i].Name == inactive.Name {
+			foundInactive = &skills[i]
+			break
+		}
+	}
+	if foundInactive == nil {
+		t.Fatalf("expected inactive skill %q in audit list", inactive.Name)
+	}
+	if foundInactive.IsActive {
+		t.Fatalf("expected inactive skill %q to remain inactive in audit list", inactive.Name)
+	}
+}
+
 func TestHandleGetSkillReturns200WithSkillObject(t *testing.T) {
 	s := newTestStoreForAdmin(t)
 	seedSkill(t, s, "my-skill")
@@ -191,6 +246,40 @@ func TestHandleGetSkillReturns404OnUnknownName(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want 404", w.Code)
+	}
+}
+
+func TestHandleGetSkillReturnsInactiveSkillViaAuditRead(t *testing.T) {
+	s := newTestStoreForAdmin(t)
+	inactive := seedInactiveSkill(t, s, "inactive-detail")
+
+	cfg := makeSkillsConfig(s)
+	h := &adminHandler{cfg: cfg}
+
+	req := newTestRequest(t, "GET", "/admin/api/skills/inactive-detail", nil)
+	req = withPathValue(req, "name", "inactive-detail")
+	req.AddCookie(makeSkillsCookie(t, cfg, "viewer"))
+	w := newTestResponseRecorder()
+
+	authed := requireRole(cfg.JWTSecret, "viewer", h.handleGetSkill)
+	authed(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+
+	var got store.Skill
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Name != inactive.Name {
+		t.Fatalf("name: got %q, want %q", got.Name, inactive.Name)
+	}
+	if got.IsActive {
+		t.Fatalf("expected inactive audit read for %q", inactive.Name)
+	}
+	if got.ReviewState != store.SkillReviewStateApproved {
+		t.Fatalf("review_state: got %q, want %q", got.ReviewState, store.SkillReviewStateApproved)
 	}
 }
 

@@ -6291,3 +6291,414 @@ func TestGetSkillVersionsIncludesCompactRules(t *testing.T) {
 		t.Errorf("v1: expected CompactRules 'v1 rules', got %q", versions[1].CompactRules)
 	}
 }
+
+func TestSkillsGovernanceMigrationAddsColumnsBackfillsAndIndex(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "lore.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	legacySchema := `
+		CREATE TABLE skills (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			name          TEXT    NOT NULL UNIQUE,
+			display_name  TEXT    NOT NULL,
+			triggers      TEXT    NOT NULL DEFAULT '',
+			content       TEXT    NOT NULL,
+			compact_rules TEXT    NOT NULL DEFAULT '',
+			version       INTEGER NOT NULL DEFAULT 1,
+			is_active     INTEGER NOT NULL DEFAULT 1,
+			changed_by    TEXT    NOT NULL DEFAULT 'system',
+			created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+			updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+		);
+		CREATE TABLE skill_versions (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			skill_id      INTEGER NOT NULL,
+			version       INTEGER NOT NULL,
+			content       TEXT    NOT NULL,
+			compact_rules TEXT    NOT NULL DEFAULT '',
+			changed_by    TEXT    NOT NULL DEFAULT 'system',
+			created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (skill_id) REFERENCES skills(id)
+		);
+		CREATE TABLE stacks (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			name         TEXT    NOT NULL UNIQUE,
+			display_name TEXT    NOT NULL
+		);
+		CREATE TABLE categories (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			name         TEXT    NOT NULL UNIQUE,
+			display_name TEXT    NOT NULL
+		);
+		CREATE TABLE skill_stacks (
+			skill_id INTEGER NOT NULL,
+			stack_id INTEGER NOT NULL,
+			PRIMARY KEY (skill_id, stack_id)
+		);
+		CREATE TABLE skill_categories (
+			skill_id    INTEGER NOT NULL,
+			category_id INTEGER NOT NULL,
+			PRIMARY KEY (skill_id, category_id)
+		);
+		CREATE VIRTUAL TABLE skills_fts USING fts5(
+			name,
+			display_name,
+			triggers,
+			content,
+			content='skills',
+			content_rowid='id'
+		);
+	`
+	if _, err := db.Exec(legacySchema); err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO skills (name, display_name, triggers, content, version, is_active, changed_by, created_at, updated_at)
+		VALUES
+			('legacy-active', 'Legacy Active', 'active trigger', 'active content', 1, 1, 'alice', '2026-04-24 01:02:03', '2026-04-24 04:05:06'),
+			('legacy-inactive', 'Legacy Inactive', 'inactive trigger', 'inactive content', 1, 0, 'bob', '2026-04-23 01:02:03', '2026-04-23 04:05:06')
+	`); err != nil {
+		t.Fatalf("seed legacy skills: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = dataDir
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() migrate legacy db: %v", err)
+	}
+	defer s.Close()
+
+	for _, col := range []string{"review_state", "created_by", "reviewed_by", "reviewed_at", "review_notes"} {
+		var got string
+		if err := s.db.QueryRow(`SELECT name FROM pragma_table_info('skills') WHERE name = ?`, col).Scan(&got); err != nil {
+			t.Fatalf("pragma_table_info(skills) missing %s: %v", col, err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name                string
+		wantState           string
+		wantCreatedBy       string
+		wantReviewedBy      string
+		wantReviewedAt      string
+		wantReviewNotes     string
+		wantReviewTimestamp bool
+	}{
+		{name: "legacy-active", wantState: SkillReviewStateApproved, wantCreatedBy: "alice", wantReviewedBy: "alice", wantReviewedAt: "2026-04-24 04:05:06", wantReviewNotes: "", wantReviewTimestamp: true},
+		{name: "legacy-inactive", wantState: SkillReviewStateApproved, wantCreatedBy: "bob", wantReviewedBy: "bob", wantReviewedAt: "2026-04-23 04:05:06", wantReviewNotes: "", wantReviewTimestamp: true},
+	} {
+		var reviewState, createdBy, reviewedBy, reviewedAt, reviewNotes string
+		if err := s.db.QueryRow(`
+			SELECT review_state, created_by, reviewed_by, reviewed_at, review_notes
+			FROM skills WHERE name = ?
+		`, tc.name).Scan(&reviewState, &createdBy, &reviewedBy, &reviewedAt, &reviewNotes); err != nil {
+			t.Fatalf("select migrated skill %s: %v", tc.name, err)
+		}
+		if reviewState != tc.wantState {
+			t.Fatalf("%s review_state = %q, want %q", tc.name, reviewState, tc.wantState)
+		}
+		if createdBy != tc.wantCreatedBy {
+			t.Fatalf("%s created_by = %q, want %q", tc.name, createdBy, tc.wantCreatedBy)
+		}
+		if reviewedBy != tc.wantReviewedBy {
+			t.Fatalf("%s reviewed_by = %q, want %q", tc.name, reviewedBy, tc.wantReviewedBy)
+		}
+		if tc.wantReviewTimestamp && reviewedAt != tc.wantReviewedAt {
+			t.Fatalf("%s reviewed_at = %q, want %q", tc.name, reviewedAt, tc.wantReviewedAt)
+		}
+		if reviewNotes != tc.wantReviewNotes {
+			t.Fatalf("%s review_notes = %q, want %q", tc.name, reviewNotes, tc.wantReviewNotes)
+		}
+	}
+
+	var indexName string
+	if err := s.db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_skills_review_state_active'`).Scan(&indexName); err != nil {
+		t.Fatalf("expected idx_skills_review_state_active index: %v", err)
+	}
+}
+
+func TestSkillsGovernanceMigrationPreservesLegacyResolutionAndAuditVisibility(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "lore.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	legacySchema := `
+		CREATE TABLE skills (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			name          TEXT    NOT NULL UNIQUE,
+			display_name  TEXT    NOT NULL,
+			triggers      TEXT    NOT NULL DEFAULT '',
+			content       TEXT    NOT NULL,
+			compact_rules TEXT    NOT NULL DEFAULT '',
+			version       INTEGER NOT NULL DEFAULT 1,
+			is_active     INTEGER NOT NULL DEFAULT 1,
+			changed_by    TEXT    NOT NULL DEFAULT 'system',
+			created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+			updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+		);
+		CREATE TABLE skill_versions (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			skill_id      INTEGER NOT NULL,
+			version       INTEGER NOT NULL,
+			content       TEXT    NOT NULL,
+			compact_rules TEXT    NOT NULL DEFAULT '',
+			changed_by    TEXT    NOT NULL DEFAULT 'system',
+			created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (skill_id) REFERENCES skills(id)
+		);
+		CREATE TABLE stacks (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			name         TEXT    NOT NULL UNIQUE,
+			display_name TEXT    NOT NULL
+		);
+		CREATE TABLE categories (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			name         TEXT    NOT NULL UNIQUE,
+			display_name TEXT    NOT NULL
+		);
+		CREATE TABLE skill_stacks (
+			skill_id INTEGER NOT NULL,
+			stack_id INTEGER NOT NULL,
+			PRIMARY KEY (skill_id, stack_id)
+		);
+		CREATE TABLE skill_categories (
+			skill_id    INTEGER NOT NULL,
+			category_id INTEGER NOT NULL,
+			PRIMARY KEY (skill_id, category_id)
+		);
+		CREATE VIRTUAL TABLE skills_fts USING fts5(
+			name,
+			display_name,
+			triggers,
+			content,
+			content='skills',
+			content_rowid='id'
+		);
+	`
+	if _, err := db.Exec(legacySchema); err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO skills (name, display_name, triggers, content, version, is_active, changed_by, created_at, updated_at)
+		VALUES
+			('legacy-active', 'Legacy Active', 'active trigger', 'active content', 1, 1, 'alice', '2026-04-24 01:02:03', '2026-04-24 04:05:06'),
+			('legacy-inactive', 'Legacy Inactive', 'inactive trigger', 'inactive content', 1, 0, 'bob', '2026-04-23 01:02:03', '2026-04-23 04:05:06')
+	`); err != nil {
+		t.Fatalf("seed legacy skills: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	cfg := mustDefaultConfig(t)
+	cfg.DataDir = dataDir
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() migrate legacy db: %v", err)
+	}
+	defer s.Close()
+
+	resolved, err := s.GetSkill("legacy-active")
+	if err != nil {
+		t.Fatalf("GetSkill(legacy-active): %v", err)
+	}
+	if resolved.ReviewState != SkillReviewStateApproved {
+		t.Fatalf("legacy-active review_state = %q, want %q", resolved.ReviewState, SkillReviewStateApproved)
+	}
+	if !resolved.IsActive {
+		t.Fatal("legacy-active should remain active and resolvable after migration")
+	}
+	if resolved.Content != "active content" {
+		t.Fatalf("legacy-active content = %q, want active content", resolved.Content)
+	}
+
+	resolvedList, err := s.ListSkills(ListSkillsParams{Query: "legacy"})
+	if err != nil {
+		t.Fatalf("ListSkills(Query=legacy): %v", err)
+	}
+	if len(resolvedList) != 1 {
+		t.Fatalf("ListSkills(Query=legacy) len = %d, want 1", len(resolvedList))
+	}
+	if resolvedList[0].Name != "legacy-active" {
+		t.Fatalf("ListSkills(Query=legacy)[0].Name = %q, want legacy-active", resolvedList[0].Name)
+	}
+
+	if _, err := s.GetSkill("legacy-inactive"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetSkill(legacy-inactive) error = %v, want sql.ErrNoRows", err)
+	}
+
+	auditSkill, err := s.GetSkillForAudit("legacy-inactive")
+	if err != nil {
+		t.Fatalf("GetSkillForAudit(legacy-inactive): %v", err)
+	}
+	if auditSkill.ReviewState != SkillReviewStateApproved {
+		t.Fatalf("legacy-inactive review_state = %q, want %q", auditSkill.ReviewState, SkillReviewStateApproved)
+	}
+	if auditSkill.IsActive {
+		t.Fatal("legacy-inactive should remain inactive in audit reads after migration")
+	}
+	if auditSkill.Content != "inactive content" {
+		t.Fatalf("legacy-inactive content = %q, want inactive content", auditSkill.Content)
+	}
+
+	auditList, err := s.ListSkillsForAudit(ListSkillsParams{Query: "legacy"})
+	if err != nil {
+		t.Fatalf("ListSkillsForAudit(Query=legacy): %v", err)
+	}
+	if len(auditList) != 2 {
+		t.Fatalf("ListSkillsForAudit(Query=legacy) len = %d, want 2", len(auditList))
+	}
+
+	foundInactive := false
+	for _, skill := range auditList {
+		if skill.Name == "legacy-inactive" {
+			foundInactive = true
+			if skill.IsActive {
+				t.Fatal("legacy-inactive should stay inactive in audit list")
+			}
+			if skill.ReviewState != SkillReviewStateApproved {
+				t.Fatalf("audit list review_state = %q, want %q", skill.ReviewState, SkillReviewStateApproved)
+			}
+		}
+	}
+	if !foundInactive {
+		t.Fatal("ListSkillsForAudit(Query=legacy) missing legacy-inactive")
+	}
+}
+
+func TestListSkillsReturnsOnlyApprovedActiveSkills(t *testing.T) {
+	s := newTestStore(t)
+
+	seedSkills(t, s)
+	if _, err := s.CreateSkill(CreateSkillParams{Name: "pending-skill", DisplayName: "Pending Skill", Content: "pending content", ChangedBy: "system"}); err != nil {
+		t.Fatalf("CreateSkill pending-skill: %v", err)
+	}
+	if _, err := s.CreateSkill(CreateSkillParams{Name: "rejected-skill", DisplayName: "Rejected Skill", Content: "rejected content", ChangedBy: "system"}); err != nil {
+		t.Fatalf("CreateSkill rejected-skill: %v", err)
+	}
+	if _, err := s.CreateSkill(CreateSkillParams{Name: "inactive-skill", DisplayName: "Inactive Skill", Content: "inactive content", ChangedBy: "system"}); err != nil {
+		t.Fatalf("CreateSkill inactive-skill: %v", err)
+	}
+
+	if _, err := s.db.Exec(`UPDATE skills SET review_state = ? WHERE name = 'pending-skill'`, SkillReviewStatePendingReview); err != nil {
+		t.Fatalf("mark pending-skill pending_review: %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE skills SET review_state = ? WHERE name = 'rejected-skill'`, SkillReviewStateRejected); err != nil {
+		t.Fatalf("mark rejected-skill rejected: %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE skills SET is_active = 0 WHERE name = 'inactive-skill'`); err != nil {
+		t.Fatalf("deactivate inactive-skill: %v", err)
+	}
+
+	skills, err := s.ListSkills(ListSkillsParams{})
+	if err != nil {
+		t.Fatalf("ListSkills: %v", err)
+	}
+	if len(skills) != 3 {
+		t.Fatalf("ListSkills() len = %d, want 3 approved active skills", len(skills))
+	}
+	for _, sk := range skills {
+		if sk.ReviewState != SkillReviewStateApproved {
+			t.Fatalf("ListSkills() returned %q with review_state=%q, want only approved", sk.Name, sk.ReviewState)
+		}
+		if !sk.IsActive {
+			t.Fatalf("ListSkills() returned inactive skill %q", sk.Name)
+		}
+		if sk.Name == "pending-skill" || sk.Name == "rejected-skill" || sk.Name == "inactive-skill" {
+			t.Fatalf("ListSkills() unexpectedly returned non-resolvable skill %q", sk.Name)
+		}
+	}
+}
+
+func TestGetSkillReturnsErrNoRowsForNonResolvableSkill(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.CreateSkill(CreateSkillParams{Name: "pending-skill", DisplayName: "Pending Skill", Content: "pending content", ChangedBy: "system"}); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE skills SET review_state = ?, reviewed_by = ?, reviewed_at = ?, review_notes = ? WHERE name = ?`, SkillReviewStatePendingReview, "reviewer", "2026-04-24 10:00:00", "needs review", "pending-skill"); err != nil {
+		t.Fatalf("update review metadata: %v", err)
+	}
+
+	_, err := s.GetSkill("pending-skill")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetSkill() error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestAuditSkillReadsExposeGovernanceMetadataWithoutMakingRowsResolvable(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.CreateSkill(CreateSkillParams{Name: "pending-skill", DisplayName: "Pending Skill", Content: "pending content", ChangedBy: "creator"}); err != nil {
+		t.Fatalf("CreateSkill pending-skill: %v", err)
+	}
+	if _, err := s.CreateSkill(CreateSkillParams{Name: "approved-skill", DisplayName: "Approved Skill", Content: "approved content", ChangedBy: "creator"}); err != nil {
+		t.Fatalf("CreateSkill approved-skill: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		UPDATE skills
+		SET review_state = ?, created_by = ?, reviewed_by = ?, reviewed_at = ?, review_notes = ?
+		WHERE name = ?
+	`, SkillReviewStatePendingReview, "creator", "reviewer", "2026-04-24 11:00:00", "waiting for review", "pending-skill"); err != nil {
+		t.Fatalf("update pending-skill governance metadata: %v", err)
+	}
+
+	auditSkill, err := s.GetSkillForAudit("pending-skill")
+	if err != nil {
+		t.Fatalf("GetSkillForAudit: %v", err)
+	}
+	if auditSkill.ReviewState != SkillReviewStatePendingReview {
+		t.Fatalf("GetSkillForAudit() review_state = %q, want %q", auditSkill.ReviewState, SkillReviewStatePendingReview)
+	}
+	if auditSkill.CreatedBy != "creator" {
+		t.Fatalf("GetSkillForAudit() created_by = %q, want %q", auditSkill.CreatedBy, "creator")
+	}
+	if auditSkill.ReviewedBy != "reviewer" {
+		t.Fatalf("GetSkillForAudit() reviewed_by = %q, want %q", auditSkill.ReviewedBy, "reviewer")
+	}
+	if auditSkill.ReviewedAt == nil || *auditSkill.ReviewedAt != "2026-04-24 11:00:00" {
+		t.Fatalf("GetSkillForAudit() reviewed_at = %v, want 2026-04-24 11:00:00", auditSkill.ReviewedAt)
+	}
+	if auditSkill.ReviewNotes != "waiting for review" {
+		t.Fatalf("GetSkillForAudit() review_notes = %q, want %q", auditSkill.ReviewNotes, "waiting for review")
+	}
+
+	auditSkills, err := s.ListSkillsForAudit(ListSkillsParams{})
+	if err != nil {
+		t.Fatalf("ListSkillsForAudit: %v", err)
+	}
+	if len(auditSkills) != 2 {
+		t.Fatalf("ListSkillsForAudit() len = %d, want 2", len(auditSkills))
+	}
+
+	foundPending := false
+	for _, sk := range auditSkills {
+		if sk.Name == "pending-skill" {
+			foundPending = true
+			if sk.ReviewState != SkillReviewStatePendingReview {
+				t.Fatalf("ListSkillsForAudit() review_state = %q, want %q", sk.ReviewState, SkillReviewStatePendingReview)
+			}
+		}
+	}
+	if !foundPending {
+		t.Fatal("ListSkillsForAudit() missing pending-skill")
+	}
+
+	_, err = s.GetSkill("pending-skill")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetSkill() after audit lookup error = %v, want sql.ErrNoRows", err)
+	}
+}

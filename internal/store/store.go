@@ -295,6 +295,11 @@ func (s *Store) migrate() error {
 			compact_rules TEXT    NOT NULL DEFAULT '',
 			version       INTEGER NOT NULL DEFAULT 1,
 			is_active     INTEGER NOT NULL DEFAULT 1,
+			review_state  TEXT    NOT NULL DEFAULT 'approved',
+			created_by    TEXT    NOT NULL DEFAULT 'system',
+			reviewed_by   TEXT    NOT NULL DEFAULT 'system',
+			reviewed_at   TEXT,
+			review_notes  TEXT    NOT NULL DEFAULT '',
 			changed_by    TEXT    NOT NULL DEFAULT 'system',
 			created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
 			updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
@@ -560,6 +565,46 @@ func (s *Store) migrate() error {
 	if err := s.addColumnIfNotExists("skill_versions", "compact_rules", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	if err := s.addColumnIfNotExists("skills", "review_state", "TEXT NOT NULL DEFAULT 'approved'"); err != nil {
+		return err
+	}
+	if err := s.addColumnIfNotExists("skills", "created_by", "TEXT NOT NULL DEFAULT 'system'"); err != nil {
+		return err
+	}
+	if err := s.addColumnIfNotExists("skills", "reviewed_by", "TEXT NOT NULL DEFAULT 'system'"); err != nil {
+		return err
+	}
+	if err := s.addColumnIfNotExists("skills", "reviewed_at", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.addColumnIfNotExists("skills", "review_notes", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := s.execHook(s.db, `
+		UPDATE skills
+		SET review_state = CASE
+			WHEN review_state IS NULL OR trim(review_state) = '' THEN 'approved'
+			ELSE review_state
+		END,
+		created_by = CASE
+			WHEN created_by IS NULL OR trim(created_by) = '' OR (created_by = 'system' AND (reviewed_at IS NULL OR trim(reviewed_at) = '')) THEN COALESCE(NULLIF(trim(changed_by), ''), 'system')
+			ELSE created_by
+		END,
+		reviewed_by = CASE
+			WHEN reviewed_by IS NULL OR trim(reviewed_by) = '' OR (reviewed_by = 'system' AND (reviewed_at IS NULL OR trim(reviewed_at) = '')) THEN COALESCE(NULLIF(trim(changed_by), ''), 'system')
+			ELSE reviewed_by
+		END,
+		reviewed_at = CASE
+			WHEN reviewed_at IS NULL OR trim(reviewed_at) = '' THEN updated_at
+			ELSE reviewed_at
+		END,
+		review_notes = COALESCE(review_notes, '')
+	`); err != nil {
+		return err
+	}
+	if _, err := s.execHook(s.db, `CREATE INDEX IF NOT EXISTS idx_skills_review_state_active ON skills(review_state, is_active)`); err != nil {
+		return err
+	}
 
 	// Skills FTS triggers (separate idempotent check)
 	var skillsTrigger string
@@ -589,6 +634,9 @@ func (s *Store) migrate() error {
 		if _, err := s.execHook(s.db, skillsTriggers); err != nil {
 			return err
 		}
+	}
+	if _, err := s.execHook(s.db, `INSERT INTO skills_fts(skills_fts) VALUES ('rebuild')`); err != nil {
+		return err
 	}
 
 	return nil
@@ -4098,6 +4146,57 @@ func (s *Store) insertSkillRelationshipsTx(tx *sql.Tx, skillID int64, stackIDs, 
 	return nil
 }
 
+func scanSQLiteSkill(scanner interface{ Scan(dest ...any) error }, skill *Skill) error {
+	var isActive int
+	var reviewedAt sql.NullString
+	if err := scanner.Scan(
+		&skill.ID,
+		&skill.Name,
+		&skill.DisplayName,
+		&skill.Triggers,
+		&skill.Content,
+		&skill.CompactRules,
+		&skill.Version,
+		&isActive,
+		&skill.ReviewState,
+		&skill.CreatedBy,
+		&skill.ReviewedBy,
+		&reviewedAt,
+		&skill.ReviewNotes,
+		&skill.ChangedBy,
+		&skill.CreatedAt,
+		&skill.UpdatedAt,
+	); err != nil {
+		return err
+	}
+	skill.IsActive = isActive == 1
+	if reviewedAt.Valid {
+		skill.ReviewedAt = &reviewedAt.String
+	} else {
+		skill.ReviewedAt = nil
+	}
+	return nil
+}
+
+func sqliteSkillSelect(contentExpr, compactRulesExpr string) string {
+	return fmt.Sprintf(`
+		SELECT skills.id, skills.name, skills.display_name, skills.triggers, %s, %s, skills.version, skills.is_active,
+		       review_state, created_by, reviewed_by, reviewed_at, review_notes,
+		       changed_by, created_at, updated_at
+		FROM skills
+	`, contentExpr, compactRulesExpr)
+}
+
+func (s *Store) loadSQLiteSkillRelationships(target *Skill, db queryer) error {
+	stacks, categories, err := s.loadSkillRelationships(db, target.ID)
+	if err != nil {
+		return err
+	}
+	target.Stacks = stacks
+	target.Categories = categories
+	return nil
+}
+
 // CreateSkill inserts a new skill row and an initial skill_versions row (v1).
 // Returns an error if a skill with the same name already exists.
 func (s *Store) CreateSkill(params CreateSkillParams) (*Skill, error) {
@@ -4109,9 +4208,13 @@ func (s *Store) CreateSkill(params CreateSkillParams) (*Skill, error) {
 	var skill *Skill
 	err := s.withTx(func(tx *sql.Tx) error {
 		res, err := s.execHook(tx, `
-			INSERT INTO skills (name, display_name, triggers, content, compact_rules, version, is_active, changed_by)
-			VALUES (?, ?, ?, ?, ?, 1, 1, ?)`,
-			params.Name, params.DisplayName, params.Triggers, params.Content, params.CompactRules, changedBy,
+			INSERT INTO skills (
+				name, display_name, triggers, content, compact_rules, version, is_active,
+				review_state, created_by, reviewed_by, reviewed_at, review_notes, changed_by
+			)
+			VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?, datetime('now'), '', ?)`,
+			params.Name, params.DisplayName, params.Triggers, params.Content, params.CompactRules,
+			SkillReviewStateApproved, changedBy, changedBy, changedBy,
 		)
 		if err != nil {
 			return err
@@ -4136,26 +4239,19 @@ func (s *Store) CreateSkill(params CreateSkillParams) (*Skill, error) {
 		}
 
 		// Read back the full row
-		rows, err := s.queryHook(tx, `
-			SELECT id, name, display_name, triggers, content, compact_rules, version, is_active, changed_by, created_at, updated_at
-			FROM skills WHERE id = ?`, skillID)
+		rows, err := s.queryHook(tx, sqliteSkillSelect("content", "compact_rules")+` WHERE id = ?`, skillID)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		if rows.Next() {
 			var sk Skill
-			var isActive int
-			if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.CompactRules, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+			if err := scanSQLiteSkill(rows, &sk); err != nil {
 				return err
 			}
-			sk.IsActive = isActive == 1
-			stacks, categories, err := s.loadSkillRelationships(tx, sk.ID)
-			if err != nil {
+			if err := s.loadSQLiteSkillRelationships(&sk, tx); err != nil {
 				return err
 			}
-			sk.Stacks = stacks
-			sk.Categories = categories
 			skill = &sk
 		}
 		return rows.Err()
@@ -4248,26 +4344,19 @@ func (s *Store) UpdateSkill(name string, params UpdateSkillParams) (*Skill, erro
 		}
 
 		// Read back full row
-		rows, err := s.queryHook(tx, `
-			SELECT id, name, display_name, triggers, content, compact_rules, version, is_active, changed_by, created_at, updated_at
-			FROM skills WHERE id = ?`, skillID)
+		rows, err := s.queryHook(tx, sqliteSkillSelect("content", "compact_rules")+` WHERE id = ?`, skillID)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		if rows.Next() {
 			var sk Skill
-			var isActive int
-			if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.CompactRules, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+			if err := scanSQLiteSkill(rows, &sk); err != nil {
 				return err
 			}
-			sk.IsActive = isActive == 1
-			stacks, categories, err := s.loadSkillRelationships(tx, sk.ID)
-			if err != nil {
+			if err := s.loadSQLiteSkillRelationships(&sk, tx); err != nil {
 				return err
 			}
-			sk.Stacks = stacks
-			sk.Categories = categories
 			skill = &sk
 		}
 		return rows.Err()
@@ -4278,9 +4367,8 @@ func (s *Store) UpdateSkill(name string, params UpdateSkillParams) (*Skill, erro
 // GetSkill returns the full skill (including content) by name.
 // Returns nil, sql.ErrNoRows if not found.
 func (s *Store) GetSkill(name string) (*Skill, error) {
-	rows, err := s.queryHook(s.db, `
-		SELECT id, name, display_name, triggers, content, compact_rules, version, is_active, changed_by, created_at, updated_at
-		FROM skills WHERE name = ?`, name)
+	rows, err := s.queryHook(s.db, sqliteSkillSelect("content", "compact_rules")+`
+		WHERE name = ? AND review_state = ? AND is_active = 1`, name, SkillReviewStateApproved)
 	if err != nil {
 		return nil, err
 	}
@@ -4288,17 +4376,12 @@ func (s *Store) GetSkill(name string) (*Skill, error) {
 
 	if rows.Next() {
 		var sk Skill
-		var isActive int
-		if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.CompactRules, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		if err := scanSQLiteSkill(rows, &sk); err != nil {
 			return nil, err
 		}
-		sk.IsActive = isActive == 1
-		stacks, categories, err := s.loadSkillRelationships(s.db, sk.ID)
-		if err != nil {
+		if err := s.loadSQLiteSkillRelationships(&sk, s.db); err != nil {
 			return nil, err
 		}
-		sk.Stacks = stacks
-		sk.Categories = categories
 		return &sk, rows.Err()
 	}
 	if err := rows.Err(); err != nil {
@@ -4316,39 +4399,35 @@ func (s *Store) ListSkills(params ListSkillsParams) ([]Skill, error) {
 	if params.Query != "" {
 		// FTS5 path
 		ftsQuery := sanitizeFTS(params.Query)
-		sqlQ = `
-			SELECT sk.id, sk.name, sk.display_name, sk.triggers, '' as content, '' as compact_rules,
-			       sk.version, sk.is_active, sk.changed_by, sk.created_at, sk.updated_at
-			FROM skills_fts fts
-			JOIN skills sk ON sk.id = fts.rowid
-			WHERE skills_fts MATCH ? AND sk.is_active = 1`
-		args = []any{ftsQuery}
+		sqlQ = sqliteSkillSelect(`'' AS content`, `'' AS compact_rules`) + `
+			JOIN skills_fts fts ON skills.id = fts.rowid
+			WHERE skills_fts MATCH ? AND review_state = ? AND is_active = 1`
+		args = []any{ftsQuery, SkillReviewStateApproved}
 
 		if params.StackID != nil {
-			sqlQ += " AND sk.id IN (SELECT skill_id FROM skill_stacks WHERE stack_id = ?)"
+			sqlQ += " AND skills.id IN (SELECT skill_id FROM skill_stacks WHERE stack_id = ?)"
 			args = append(args, *params.StackID)
 		}
 		if params.CategoryID != nil {
-			sqlQ += " AND sk.id IN (SELECT skill_id FROM skill_categories WHERE category_id = ?)"
+			sqlQ += " AND skills.id IN (SELECT skill_id FROM skill_categories WHERE category_id = ?)"
 			args = append(args, *params.CategoryID)
 		}
 		sqlQ += " ORDER BY fts.rank"
 	} else {
 		// Plain SELECT path (metadata only — compact_rules intentionally omitted)
-		sqlQ = `
-			SELECT sk.id, sk.name, sk.display_name, sk.triggers, '' as content, '' as compact_rules,
-			       sk.version, sk.is_active, sk.changed_by, sk.created_at, sk.updated_at
-			FROM skills sk WHERE sk.is_active = 1`
+		sqlQ = sqliteSkillSelect(`'' AS content`, `'' AS compact_rules`) + `
+			WHERE review_state = ? AND is_active = 1`
+		args = []any{SkillReviewStateApproved}
 
 		if params.StackID != nil {
-			sqlQ += " AND sk.id IN (SELECT skill_id FROM skill_stacks WHERE stack_id = ?)"
+			sqlQ += " AND skills.id IN (SELECT skill_id FROM skill_stacks WHERE stack_id = ?)"
 			args = append(args, *params.StackID)
 		}
 		if params.CategoryID != nil {
-			sqlQ += " AND sk.id IN (SELECT skill_id FROM skill_categories WHERE category_id = ?)"
+			sqlQ += " AND skills.id IN (SELECT skill_id FROM skill_categories WHERE category_id = ?)"
 			args = append(args, *params.CategoryID)
 		}
-		sqlQ += " ORDER BY sk.name ASC"
+		sqlQ += " ORDER BY skills.name ASC"
 	}
 
 	rows, err := s.queryItHook(s.db, sqlQ, args...)
@@ -4360,23 +4439,96 @@ func (s *Store) ListSkills(params ListSkillsParams) ([]Skill, error) {
 	var results []Skill
 	for rows.Next() {
 		var sk Skill
-		var isActive int
-		if err := rows.Scan(&sk.ID, &sk.Name, &sk.DisplayName, &sk.Triggers, &sk.Content, &sk.CompactRules, &sk.Version, &isActive, &sk.ChangedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		if err := scanSQLiteSkill(rows, &sk); err != nil {
 			return nil, err
 		}
-		sk.IsActive = isActive == 1
-		stacks, categories, err := s.loadSkillRelationships(s.db, sk.ID)
-		if err != nil {
+		if err := s.loadSQLiteSkillRelationships(&sk, s.db); err != nil {
 			return nil, err
 		}
-		sk.Stacks = stacks
-		sk.Categories = categories
 		results = append(results, sk)
 	}
 	if results == nil {
 		results = []Skill{}
 	}
 	return results, rows.Err()
+}
+
+func (s *Store) GetSkillForAudit(name string) (*Skill, error) {
+	rows, err := s.queryHook(s.db, sqliteSkillSelect("content", "compact_rules")+` WHERE name = ?`, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		var sk Skill
+		if err := scanSQLiteSkill(rows, &sk); err != nil {
+			return nil, err
+		}
+		if err := s.loadSQLiteSkillRelationships(&sk, s.db); err != nil {
+			return nil, err
+		}
+		return &sk, rows.Err()
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return nil, sql.ErrNoRows
+}
+
+func (s *Store) ListSkillsForAudit(params ListSkillsParams) ([]Skill, error) {
+	var sqlQ string
+	var args []any
+
+	if params.Query != "" {
+		ftsQuery := sanitizeFTS(params.Query)
+		sqlQ = sqliteSkillSelect(`'' AS content`, `'' AS compact_rules`) + `
+			JOIN skills_fts fts ON skills.id = fts.rowid
+			WHERE skills_fts MATCH ?`
+		args = []any{ftsQuery}
+		if params.StackID != nil {
+			sqlQ += " AND skills.id IN (SELECT skill_id FROM skill_stacks WHERE stack_id = ?)"
+			args = append(args, *params.StackID)
+		}
+		if params.CategoryID != nil {
+			sqlQ += " AND skills.id IN (SELECT skill_id FROM skill_categories WHERE category_id = ?)"
+			args = append(args, *params.CategoryID)
+		}
+		sqlQ += " ORDER BY fts.rank"
+	} else {
+		sqlQ = sqliteSkillSelect(`'' AS content`, `'' AS compact_rules`) + ` WHERE 1 = 1`
+		if params.StackID != nil {
+			sqlQ += " AND skills.id IN (SELECT skill_id FROM skill_stacks WHERE stack_id = ?)"
+			args = append(args, *params.StackID)
+		}
+		if params.CategoryID != nil {
+			sqlQ += " AND skills.id IN (SELECT skill_id FROM skill_categories WHERE category_id = ?)"
+			args = append(args, *params.CategoryID)
+		}
+		sqlQ += " ORDER BY skills.name ASC"
+	}
+
+	rows, err := s.queryItHook(s.db, sqlQ, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := make([]Skill, 0)
+	for rows.Next() {
+		var sk Skill
+		if err := scanSQLiteSkill(rows, &sk); err != nil {
+			return nil, err
+		}
+		if err := s.loadSQLiteSkillRelationships(&sk, s.db); err != nil {
+			return nil, err
+		}
+		results = append(results, sk)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 // GetSkillVersions returns the version history for a skill, ordered by version DESC.
